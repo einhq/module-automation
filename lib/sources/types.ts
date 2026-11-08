@@ -55,7 +55,7 @@ export type EntityUpdate = {
 };
 
 /** An entity's state. */
-export type StateUpdate = {
+type StateUpdate = {
   kind: 'state';
   device: string;
   entity: string;
@@ -64,7 +64,7 @@ export type StateUpdate = {
 };
 
 /** A button was pressed: `value` is how (`single`, `double`, `long`, …). */
-export type EventUpdate = {
+type EventUpdate = {
   kind: 'event';
   device: string;
   entity: string;
@@ -72,14 +72,14 @@ export type EventUpdate = {
 };
 
 /** A device came online or went away. */
-export type OnlineUpdate = {
+type OnlineUpdate = {
   kind: 'online';
   device: string;
   online: boolean;
 };
 
 /** A device stopped announcing an entity. */
-export type RetireUpdate = {
+type RetireUpdate = {
   kind: 'retire';
   device: string;
   entity: string;
