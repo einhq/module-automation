@@ -86,6 +86,14 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
         (history) => history.readings.length === 2,
       );
       assertEquals([history.unit, history.readings.map((reading) => reading.value)], ['°C', [21.4, 22]]);
+      const recent = await anna.execJson<DeviceHistory>('device-history hall-sensor/temperature --since 1h');
+      assertEquals(recent.readings.map((reading) => reading.value), [21.4, 22]);
+      const daily = await anna.execJson<DeviceHistory>('device-history hall-sensor/temperature --since 1d --bucket 1d --agg max');
+      assertEquals([daily.bucket, daily.readings.at(-1)?.value, daily.readings.reduce((sum, reading) => sum + (reading.count ?? 0), 0)], [
+        { seconds: 86_400, aggregate: 'max' },
+        22,
+        2,
+      ]);
       const queued = await until('queue', () => anna.execString('queue-peek /home/anna/hall'), (text) => text.includes('22'));
       assertEquals(queued.includes('°C'), true);
     });

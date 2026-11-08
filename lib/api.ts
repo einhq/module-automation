@@ -132,12 +132,19 @@ export type DeviceSetResult = {
   value: string;
 };
 
-/** `device-history`: one entity's readings, oldest first. */
+/** How `device-history --bucket` sums each interval up. */
+export type HistoryAggregate = 'avg' | 'min' | 'max' | 'sum' | 'count' | 'first' | 'last';
+
+/**
+ * `device-history`: one entity's readings, oldest first; with `--bucket`, one per interval, where
+ * `at` is the interval's start, `value` its readings summed up and `count` how many there were.
+ */
 export type DeviceHistory = {
   device: string;
   entity: string;
   unit?: string;
-  readings: { at: string; value: Value }[];
+  bucket?: { seconds: number; aggregate: HistoryAggregate };
+  readings: { at: string; value: Value; count?: number }[];
 };
 
 /** `automation-status`: the bridge, as this process sees it. */

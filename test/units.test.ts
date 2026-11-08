@@ -7,6 +7,7 @@ import { parseTarget } from '../lib/paths.ts';
 import { labelOf, slug } from '../lib/slug.ts';
 import { compileTemplate } from '../lib/sources/template.ts';
 import { decide } from '../lib/throttle.ts';
+import { parseDuration, parseMoment } from '../lib/time.ts';
 
 const run = (template: string, payload: string): unknown => {
   const compiled = compileTemplate(template);
@@ -56,4 +57,15 @@ Deno.test('throttle: when a reading is published', () => {
   assertEquals(decide({ value: 21, at: 0 }, 22, 10_000, 10_000), { publish: 'now' });
   assertEquals(decide({ value: true, at: 0 }, false, 1, 10_000), { publish: 'now' });
   assertEquals(decide({ value: 'single', at: 0 }, 'double', 1, 10_000), { publish: 'now' });
+});
+
+Deno.test('times: a duration, and a moment as a time or as that long ago', () => {
+  assertEquals(parseDuration('15m'), 900_000);
+  assertEquals(parseDuration('1.5h'), 5_400_000);
+  assertEquals(parseDuration('7d'), 604_800_000);
+  assertEquals(parseDuration('7 days'), undefined);
+  const now = Date.UTC(2026, 0, 5);
+  assertEquals(parseMoment('24h', now)?.toISOString(), '2026-01-04T00:00:00.000Z');
+  assertEquals(parseMoment('2026-01-01T12:00:00Z', now)?.toISOString(), '2026-01-01T12:00:00.000Z');
+  assertEquals(parseMoment('yesterday', now), undefined);
 });

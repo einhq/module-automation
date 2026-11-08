@@ -3,8 +3,8 @@
  * `device-show` and `device-history` answer. A value is the last entry of the entity's history.
  */
 
-import { type Command, readTail } from '@ein/client';
-import type { DeviceAttrs, DeviceInfo, DeviceSummary, EntityAttrs, EntitySummary, Reading, Value } from './api.ts';
+import { type Command, readBuckets, readRange, readTail, SYSTEM_TIME_ZONE } from '@ein/client';
+import type { DeviceAttrs, DeviceInfo, DeviceSummary, EntityAttrs, EntitySummary, HistoryAggregate, Reading, Value } from './api.ts';
 import { DEVICE_TYPE, devicePath, DEVICES_ROOT, ENTITY_TYPE, entityPath, HISTORY_NAME, SET_NAME, SETTABLE_KINDS } from './paths.ts';
 
 /** A command's failure, said once on stderr. */
@@ -19,6 +19,40 @@ export const readingsOf = async (cmd: Command, device: string, entity: string, l
   return samples
     .filter((sample) => sample.value !== null && typeof sample.value === 'object' && 'value' in sample.value)
     .map((sample) => ({ at: new Date(sample.at).toISOString(), value: sample.value.value }));
+};
+
+/** The readings of an entity written in `[since, until)`, oldest first; with `limit`, the latest that many. */
+export const readingsBetween = async (
+  cmd: Command,
+  device: string,
+  entity: string,
+  range: { since?: Date; until?: Date; limit?: number },
+): Promise<{ at: string; value: Value }[]> => {
+  const samples = await readRange<Reading>(cmd.sys.vfs, cmd.access, `${entityPath(device, entity)}/${HISTORY_NAME}`, range);
+  return samples
+    .filter((sample) => sample.value !== null && typeof sample.value === 'object' && 'value' in sample.value)
+    .map((sample) => ({ at: new Date(sample.at).toISOString(), value: sample.value.value }));
+};
+
+/**
+ * An entity's readings in `[since, until)` summed up per interval of `seconds`, oldest first; a day
+ * is a calendar day in the system's time zone, and on and off count as 1 and 0.
+ */
+export const readingsPer = async (
+  cmd: Command,
+  device: string,
+  entity: string,
+  query: { since?: Date; until?: Date; seconds: number; aggregate: HistoryAggregate },
+): Promise<{ at: string; value: Value; count: number }[]> => {
+  const buckets = await readBuckets(cmd.sys.vfs, cmd.access, `${entityPath(device, entity)}/${HISTORY_NAME}`, {
+    since: query.since,
+    until: query.until,
+    bucketSeconds: query.seconds,
+    aggregate: query.aggregate,
+    field: ['value'],
+    timeZone: SYSTEM_TIME_ZONE,
+  });
+  return buckets.map((bucket) => ({ at: new Date(bucket.at).toISOString(), value: bucket.value, count: bucket.count }));
 };
 
 const lastOf = async (cmd: Command, device: string, entity: string): Promise<{ value: Value; at: string } | undefined> => (await readingsOf(cmd, device, entity, 1))[0];

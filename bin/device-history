@@ -1,34 +1,63 @@
 #!ts
 /**
- * device-history — an entity's latest readings, oldest first. As text, one `<time>\t<JSON>` line
- * each, the form `cat -t` prints a log in and the chart card reads.
+ * device-history — an entity's readings, oldest first: the latest, those of a time range, or a
+ * range summed up per interval (`--bucket 1h`), as a chart wants it. As text, one `<time>\t<JSON>`
+ * line each, the form `cat -t` prints a log in and the chart card reads.
  */
 
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
-import type { DeviceHistory } from '@automation/api';
+import type { DeviceHistory, HistoryAggregate } from '@automation/api';
 import { parseTarget } from '@automation/paths';
-import { entityOf, fail, readingsOf } from '@automation/store';
+import { entityOf, fail, readingsBetween, readingsOf, readingsPer } from '@automation/store';
+import { parseDuration, parseMoment } from '@automation/time';
 
 const DEFAULT_COUNT = 100;
+const AGGREGATES: HistoryAggregate[] = ['avg', 'min', 'max', 'sum', 'count', 'first', 'last'];
 
 const deviceHistory = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
-  const flags = parseArgs(cmd.args, { string: ['n'], unknown: collectUnknownFlags(unknown) });
+  const flags = parseArgs(cmd.args, { string: ['n', 'since', 'until', 'bucket', 'agg'], unknown: collectUnknownFlags(unknown) });
   if (await reportUnknownFlags(cmd, unknown)) return 1;
   const target = parseTarget(String(flags._[0] ?? ''));
-  if (!target?.entity) return await fail(cmd, 'device-history', 'usage: device-history <device>/<entity> [-n count]');
+  if (!target?.entity) return await fail(cmd, 'device-history', 'usage: device-history <device>/<entity> [-n count] [--since 24h] [--until time] [--bucket 1h] [--agg avg]');
   const count = flags.n === undefined ? DEFAULT_COUNT : Number(flags.n);
   if (!Number.isInteger(count) || count < 1) return await fail(cmd, 'device-history', `-n takes a whole number above 0, not ${flags.n}`);
+  const since = flags.since === undefined ? undefined : parseMoment(flags.since);
+  const until = flags.until === undefined ? undefined : parseMoment(flags.until);
+  if (flags.since !== undefined && !since) return await fail(cmd, 'device-history', `--since takes a time or a duration such as 24h, not ${flags.since}`);
+  if (flags.until !== undefined && !until) return await fail(cmd, 'device-history', `--until takes a time or a duration such as 24h, not ${flags.until}`);
+  const bucketMs = flags.bucket === undefined ? undefined : parseDuration(flags.bucket);
+  if (flags.bucket !== undefined && !(bucketMs && bucketMs >= 1000)) {
+    return await fail(cmd, 'device-history', `--bucket takes a duration of a second or more, such as 1h, not ${flags.bucket}`);
+  }
+  const aggregate = (flags.agg ?? 'avg') as HistoryAggregate;
+  if (!AGGREGATES.includes(aggregate)) return await fail(cmd, 'device-history', `--agg takes ${AGGREGATES.join(', ')}, not ${flags.agg}`);
+
   try {
     const entity = await entityOf(cmd, target.device, target.entity);
-    const readings = await readingsOf(cmd, target.device, target.entity, count);
+    let readings: DeviceHistory['readings'];
+    if (bucketMs) {
+      readings = (await readingsPer(cmd, target.device, target.entity, { since, until, seconds: bucketMs / 1000, aggregate })).slice(-count);
+    } else if (since || until) {
+      readings = await readingsBetween(cmd, target.device, target.entity, { since, until, limit: count });
+    } else {
+      readings = await readingsOf(cmd, target.device, target.entity, count);
+    }
     if (cmd.json) {
-      const history: DeviceHistory = { device: target.device, entity: target.entity, ...(entity.unit ? { unit: entity.unit } : {}), readings };
+      const history: DeviceHistory = {
+        device: target.device,
+        entity: target.entity,
+        ...(entity.unit ? { unit: entity.unit } : {}),
+        ...(bucketMs ? { bucket: { seconds: bucketMs / 1000, aggregate } } : {}),
+        readings,
+      };
       await cmd.writeJSON(history satisfies DeviceHistory);
       return 0;
     }
-    for (const reading of readings) await cmd.writeLn(`${reading.at}\t${JSON.stringify({ value: reading.value })}`);
+    for (const reading of readings) {
+      await cmd.writeLn(`${reading.at}\t${JSON.stringify(reading.count === undefined ? { value: reading.value } : { value: reading.value, count: reading.count })}`);
+    }
     return 0;
   } catch (error) {
     return await fail(cmd, 'device-history', error);
@@ -38,11 +67,22 @@ const deviceHistory = async (cmd: Command): CmdReturn => {
 deviceHistory.spec = {
   name: 'device-history',
   effect: 'read' as const,
-  description: "Show an entity's latest readings, oldest first: a temperature over the last hours, a plug's power, a button's presses",
+  description:
+    "Show an entity's readings, oldest first: the latest, those since a time, or a time range summed up per interval (an average an hour, a maximum a day) — a temperature over a week, a plug's power, a button's presses",
   args: [{ name: 'entity', type: 'string' as const, description: 'the entity, as <device>/<entity>' }],
-  flags: [{ name: 'n', type: 'string' as const, description: `how many readings, the latest (${DEFAULT_COUNT} when not given)` }],
-  examples: ['device-history hall-sensor/temperature -n 50'],
-  returns: 'DeviceHistory: device, entity, unit, readings [{at, value}]',
+  flags: [
+    { name: 'n', type: 'string' as const, description: `at most this many readings or intervals, the latest (${DEFAULT_COUNT} when not given)` },
+    { name: 'since', type: 'string' as const, description: 'from this time on: ISO 8601, or a duration such as 24h or 7d meaning that long ago' },
+    { name: 'until', type: 'string' as const, description: 'before this time, as --since takes it' },
+    { name: 'bucket', type: 'string' as const, description: 'sum the readings up per interval of this length: 15m, 1h, 1d (a day in the system time zone)' },
+    { name: 'agg', type: 'string' as const, description: `with --bucket, how: ${AGGREGATES.join(', ')} (avg when not given; on and off count as 1 and 0)` },
+  ],
+  examples: [
+    'device-history hall-sensor/temperature -n 50',
+    'device-history hall-sensor/temperature --since 7d --bucket 1h',
+    'device-history hall-plug/switch-0-power --since 30d --bucket 1d --agg max',
+  ],
+  returns: 'DeviceHistory: device, entity, unit, bucket {seconds, aggregate}, readings [{at, value, count}]',
 };
 
 export default deviceHistory;
