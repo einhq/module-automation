@@ -23,8 +23,15 @@ export type EntityCategory = 'diagnostic' | 'config';
 /** A value as the bus carries it and the history keeps it. */
 export type Value = number | string | boolean | null;
 
-/** One reading or event as it is published on the bus and appended to an entity's history. */
+/**
+ * One reading or press as it is published on the bus and appended to an entity's history. It says
+ * whose it is, since a queue hands out a message without the key it came on.
+ */
 export type Reading = {
+  device: string;
+  entity: string;
+  /** `state` for a reading or a state, `event` for a press. */
+  kind: 'state' | 'event';
   value: Value;
   unit?: string;
   /** When the bridge received it (ISO 8601). */
@@ -32,6 +39,9 @@ export type Reading = {
   /** Set when a broker replayed the device's last message after a reconnect. */
   retained?: true;
 };
+
+/** A device coming online or going away, as it is published on `automation.online.<device>`. */
+export type OnlineMessage = { device: string; online: boolean; at: string };
 
 /** Attrs of a `device` node. */
 export type DeviceAttrs = {
@@ -164,4 +174,22 @@ export type AutomationStatus = {
   /** Entities whose values the bridge cannot read, as `<device>/<entity>: why`. */
   unsupported: string[];
   lastError?: string;
+  /** The rules service, when it runs in this process. */
+  rules?: { count: number; runs: number; problems: string[] };
+};
+
+/** `automation-rule-check`: a rule file as the rules service reads it, and what its conditions say now. */
+export type RuleCheck = {
+  name: string;
+  path: string;
+  /** The account its lines run as. */
+  owner: string;
+  /** Why the service does not run it. */
+  problem?: string;
+  description?: string;
+  when?: string[];
+  if?: { condition: string; holds: boolean }[];
+  then?: string[];
+  /** With `--run`: each line run, as the caller, until one failed. */
+  ran?: { line: string; code: number }[];
 };

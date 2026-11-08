@@ -1,0 +1,6 @@
+{
+  "description": "Runs the rules under /etc/automation/rules when a reading, a press or the clock says so",
+  "restartPolicy": "on-failure",
+  "workClass": "background",
+  "statusCommand": "automation-status --rules"
+}

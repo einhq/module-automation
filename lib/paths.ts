@@ -46,3 +46,11 @@ export const parseTarget = (target: string): { device: string; entity?: string }
   if (parts.length === 0 || parts.length > 2 || parts.some((part) => part === '.' || part === '..')) return undefined;
   return parts.length === 1 ? { device: parts[0] } : { device: parts[0], entity: parts[1] };
 };
+
+/** Rules, one YAML file each, written by members of the automation group. */
+export const RULES_DIR = '/etc/automation/rules';
+/** Each run of a rule: what made it run and how each of its lines ended. */
+export const RULES_LOG = '/var/logs/automation/rules';
+/** The bus messages the rules service reads, kept while it is down. */
+export const RULES_QUEUE = '/var/queues/automation-rules';
+export const RULES_KEYS = ['automation.state.#', 'automation.event.#', 'automation.online.#'];

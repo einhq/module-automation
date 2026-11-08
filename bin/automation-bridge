@@ -11,24 +11,13 @@ import { type CmdReturn, type Command, serviceKey } from '@ein/client';
 import { runBridge } from '@automation/bridge';
 import { Sink } from '@automation/model';
 import { connectMqtt } from '@automation/mqtt';
+import { gidOf } from '@automation/groups';
 import { AUTOMATION_GROUP, DEVICES_ROOT } from '@automation/paths';
 import { createSources } from '@automation/sources';
 import { bridgeState } from '@automation/state';
 
 const DEFAULT_SOURCES = 'ha-discovery shelly';
 const DEFAULT_MIN_INTERVAL_SECONDS = 10;
-
-/** A group's id, or undefined when there is no such group. */
-const gidOf = async (cmd: Command, group: string): Promise<number | undefined> => {
-  const { code, stdout } = await cmd.execute(`JSON_OUTPUT=1 group-info ${group}`).catch(() => ({ code: 1, stdout: '' }));
-  if (code !== 0) return undefined;
-  try {
-    const gid = (JSON.parse(stdout) as { gid?: unknown }).gid;
-    return typeof gid === 'number' ? gid : undefined;
-  } catch {
-    return undefined;
-  }
-};
 
 const automationBridge = async (cmd: Command): CmdReturn => {
   const url = (cmd.env.CFG_AUTOMATION_MQTT_URL ?? '').trim();

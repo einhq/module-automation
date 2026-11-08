@@ -32,3 +32,19 @@ export const bridgeState = (): BridgeState | undefined => running;
 export const setBridgeState = (state: BridgeState | undefined): void => {
   running = state;
 };
+
+/** The running rules service, as the other commands of this process see it. */
+type RulesState = {
+  rules(): number;
+  /** Rule files that are not run, as `<name>: why`. */
+  problems(): string[];
+  runs: number;
+};
+
+let rulesRunning: RulesState | undefined;
+
+export const rulesState = (): RulesState | undefined => rulesRunning;
+
+export const setRulesState = (state: RulesState | undefined): void => {
+  rulesRunning = state;
+};

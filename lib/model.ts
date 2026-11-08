@@ -12,7 +12,7 @@
  */
 
 import { type Command, readTail, type ResourceHandleIf } from '@ein/client';
-import type { DeviceAttrs, EntityAttrs, EntityKind, Reading, Value } from './api.ts';
+import type { DeviceAttrs, EntityAttrs, EntityKind, OnlineMessage, Reading, Value } from './api.ts';
 import { DEVICE_TYPE, devicePath, DEVICES_ROOT, ENTITY_TYPE, entityKey, entityPath, HISTORY_NAME, LIVE_NAME, ONLINE_NAME, onlineKey, SET_NAME, SET_TYPE } from './paths.ts';
 import type { DeviceUpdate, EntityUpdate, Update } from './sources/types.ts';
 import { decide, type Published } from './throttle.ts';
@@ -268,7 +268,15 @@ export class Sink {
   }
 
   private async write(device: string, entity: string, state: EntityState, value: Value, retained: boolean): Promise<void> {
-    const reading: Reading = { value, ...(state.unit ? { unit: state.unit } : {}), at: new Date().toISOString(), ...(retained ? { retained: true as const } : {}) };
+    const reading: Reading = {
+      device,
+      entity,
+      kind: state.kind === 'button' ? 'event' : 'state',
+      value,
+      ...(state.unit ? { unit: state.unit } : {}),
+      at: new Date().toISOString(),
+      ...(retained ? { retained: true as const } : {}),
+    };
     const line = encoder.encode(JSON.stringify(reading) + '\n');
     state.live ??= await this.cmd.sys.vfs.open(this.cmd.access, `${entityPath(device, entity)}/${LIVE_NAME}`, { mode: 'a' });
     await state.live.write(line);
@@ -287,7 +295,8 @@ export class Sink {
       handle = await this.cmd.sys.vfs.open(this.cmd.access, `${devicePath(device)}/${ONLINE_NAME}`, { mode: 'a' });
       this.online.set(device, handle);
     }
-    await handle.write(encoder.encode(JSON.stringify({ value: online, at: new Date().toISOString() }) + '\n'));
+    const message: OnlineMessage = { device, online, at: new Date().toISOString() };
+    await handle.write(encoder.encode(JSON.stringify(message) + '\n'));
   }
 
   private async retire(device: string, entity: string): Promise<void> {

@@ -5,16 +5,18 @@
  *   automation-status            everything, as JSON in JSON mode
  *   automation-status --brief    one line, for the services list
  *   automation-status --checks   the checks `health` reads
+ *   automation-status --rules    one line on the rules service
  */
 
 import type { CmdReturn, Command, HealthCheck } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import type { AutomationStatus } from '@automation/api';
-import { bridgeState } from '@automation/state';
+import { bridgeState, rulesState } from '@automation/state';
 
 const statusOf = (cmd: Command): AutomationStatus => {
   const url = (cmd.env.CFG_AUTOMATION_MQTT_URL ?? '').trim();
   const state = bridgeState();
+  const rules = rulesState();
   return {
     configured: url !== '',
     ...(url ? { url } : {}),
@@ -27,6 +29,7 @@ const statusOf = (cmd: Command): AutomationStatus => {
     messages: state?.messages ?? 0,
     unsupported: state?.notes() ?? [],
     ...(state?.lastError ? { lastError: state.lastError } : {}),
+    ...(rules ? { rules: { count: rules.rules(), runs: rules.runs, problems: rules.problems() } } : {}),
   };
 };
 
@@ -48,14 +51,21 @@ const checks = (status: AutomationStatus): HealthCheck[] => {
 
 const automationStatus = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
-  const flags = parseArgs(cmd.args, { boolean: ['brief', 'checks'], unknown: collectUnknownFlags(unknown) });
+  const flags = parseArgs(cmd.args, { boolean: ['brief', 'checks', 'rules'], unknown: collectUnknownFlags(unknown) });
   if (await reportUnknownFlags(cmd, unknown)) return 1;
   const status = statusOf(cmd);
-  if (flags.checks) {
+  if (flags.rules) {
+    const rules = status.rules;
+    await cmd.writeLn(rules ? `${rules.count} rules, ${rules.runs} runs${rules.problems.length ? `, ${rules.problems.length} not run` : ''}` : 'not running');
+  } else if (flags.checks) {
     await cmd.writeJSON(checks(status) satisfies HealthCheck[]);
   } else if (flags.brief || !cmd.json) {
     await cmd.writeLn(brief(status));
-    if (!flags.brief) { for (const note of status.unsupported) await cmd.writeLn(`  not read: ${note}`); }
+    if (!flags.brief) {
+      for (const note of status.unsupported) await cmd.writeLn(`  not read: ${note}`);
+      if (status.rules) await cmd.writeLn(`rules: ${status.rules.count}, ${status.rules.runs} runs`);
+      for (const problem of status.rules?.problems ?? []) await cmd.writeLn(`  not run: ${problem}`);
+    }
   } else {
     await cmd.writeJSON(status satisfies AutomationStatus);
   }
@@ -69,9 +79,10 @@ automationStatus.spec = {
   flags: [
     { name: 'brief', type: 'bool' as const, description: 'one line, as the services list shows it' },
     { name: 'checks', type: 'bool' as const, description: 'the checks health reads, as JSON' },
+    { name: 'rules', type: 'bool' as const, description: 'one line on the rules service, as the services list shows it' },
   ],
   examples: ['automation-status', 'automation-status --brief'],
-  returns: 'AutomationStatus: configured, url, running, connected, since, sources, devices, entities, messages, unsupported, lastError',
+  returns: 'AutomationStatus: configured, url, running, connected, since, sources, devices, entities, messages, unsupported, lastError, rules {count, runs, problems}',
 };
 
 export default automationStatus;
