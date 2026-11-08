@@ -50,6 +50,15 @@
       "description": "Where device-set writes what an entity is asked to be; its mode says who may switch the entity."
     }
   ],
+  "ui": {
+    "routes": {
+      "/devices": "ui/pages/devices.tsx",
+      "/devices/:id": "ui/pages/device.tsx"
+    },
+    "open": {
+      "device": "/devices/{name}"
+    }
+  },
   "config": {
     "options": [
       {
