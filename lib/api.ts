@@ -14,8 +14,9 @@
  * - `text` — a word that can be chosen, from `options` when there are some
  * - `button` — a physical button: its presses are events, not a state
  * - `action` — something that can be done, with no state: a restart, a doorbell's chime
+ * - `position` — where it is: its history is a track of GPS fixes, not a log
  */
-export type EntityKind = 'sensor' | 'binary' | 'switch' | 'light' | 'number' | 'text' | 'button' | 'action';
+export type EntityKind = 'sensor' | 'binary' | 'switch' | 'light' | 'number' | 'text' | 'button' | 'action' | 'position';
 
 /** What an entity is about, when it is not the house itself (Home Assistant's entity category). */
 export type EntityCategory = 'diagnostic' | 'config';
@@ -107,6 +108,8 @@ export type EntitySummary = {
   /** Whether `device-set` takes a value for it. */
   settable: boolean;
   last?: { value: Value; at: string };
+  /** A position's track: its path, how many fixes it holds and when the last was. */
+  track?: { path: string; points: number; lastAt?: string };
 };
 
 /** A device, as `devices` answers. */
@@ -133,6 +136,28 @@ export type DeviceInfo = DeviceSummary & {
   sw?: string;
   mac?: string;
   entityList: EntitySummary[];
+};
+
+/** `device-create`: the device made, and its position's track when it has one. */
+export type DeviceCreated = {
+  device: string;
+  path: string;
+  /** The track its position is kept in. */
+  track?: string;
+};
+
+/** `device-tracker`: whether a phone or GPS tracker may post the device's position, and where. */
+export type DeviceTracker = {
+  device: string;
+  /** The track its position is kept in. */
+  track: string;
+  enabled: boolean;
+  /** The server URL a phone is given, `<origin>/tracker/<id>.<token>`, or its path without `--origin`; absent while turned off. */
+  url?: string;
+  /** What the QR code says: the URL with the device's name as Traccar Client's device identifier. */
+  qrText?: string;
+  /** The QR code as an SVG document; only with `--origin`. */
+  qrSvg?: string;
 };
 
 /** `device-set`: what was asked of which entity. */

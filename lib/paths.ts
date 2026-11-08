@@ -21,12 +21,17 @@ export const HISTORY_NAME = 'history';
 export const LIVE_NAME = 'live';
 export const SET_NAME = 'set';
 export const ONLINE_NAME = '.online';
+/** The entity a device's position is kept in, as a track. */
+export const POSITION_NAME = 'position';
 
 /** The group whose members administer devices and rules. */
 export const AUTOMATION_GROUP = 'automation';
 
 export const devicePath = (device: string): string => `${DEVICES_ROOT}/${device}`;
 export const entityPath = (device: string, entity: string): string => `${DEVICES_ROOT}/${device}/${entity}`;
+
+/** Where a device's position is kept: the `history` of its `position` entity, a track. */
+export const positionTrackPath = (device: string): string => `${entityPath(device, POSITION_NAME)}/${HISTORY_NAME}`;
 
 /** A button's presses are events; everything else is a state. */
 export const entityKey = (device: string, entity: string, kind: EntityKind): string => `automation.${kind === 'button' ? 'event' : 'state'}.${device}.${entity}`;

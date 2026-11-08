@@ -3,7 +3,8 @@
  * automation-bridge — the automation-bridge service: hears devices on the MQTT broker, keeps them
  * as devices under /archive/devices and publishes their readings, and sends what device-set asks.
  *
- * Off while CFG_AUTOMATION_MQTT_URL is empty: it says so and ends. Otherwise it runs until stopped,
+ * It gives the devices root to the automation group first, broker or not. Off while
+ * CFG_AUTOMATION_MQTT_URL is empty: it says so and ends. Otherwise it runs until stopped,
  * connecting again whenever the broker goes away.
  */
 
@@ -20,17 +21,6 @@ const DEFAULT_SOURCES = 'ha-discovery shelly';
 const DEFAULT_MIN_INTERVAL_SECONDS = 10;
 
 const automationBridge = async (cmd: Command): CmdReturn => {
-  const url = (cmd.env.CFG_AUTOMATION_MQTT_URL ?? '').trim();
-  if (!url) {
-    await cmd.writeLn('automation-bridge: off, CFG_AUTOMATION_MQTT_URL is empty: no device is heard');
-    return 0;
-  }
-  if (bridgeState()) {
-    await cmd.writeError('automation-bridge: already running\n');
-    return 1;
-  }
-  const stopped = new Promise<void>((resolve) => cmd.onInterrupt(resolve));
-
   const automationGid = await gidOf(cmd, AUTOMATION_GROUP);
   const usersGid = await gidOf(cmd, 'users');
   // Devices are the automation group's to change. A root another module made comes with the
@@ -44,6 +34,17 @@ const automationBridge = async (cmd: Command): CmdReturn => {
   } else if (automationGid !== undefined && root.props.gid === usersGid) {
     await cmd.sys.vfs.update(cmd.access, DEVICES_ROOT, { props: { gid: automationGid } });
   }
+
+  const url = (cmd.env.CFG_AUTOMATION_MQTT_URL ?? '').trim();
+  if (!url) {
+    await cmd.writeLn('automation-bridge: off, CFG_AUTOMATION_MQTT_URL is empty: no device is heard');
+    return 0;
+  }
+  if (bridgeState()) {
+    await cmd.writeError('automation-bridge: already running\n');
+    return 1;
+  }
+  const stopped = new Promise<void>((resolve) => cmd.onInterrupt(resolve));
 
   const clientId = `ein-automation-${crypto.randomUUID().slice(0, 8)}`;
   const names = (cmd.env.CFG_AUTOMATION_SOURCES || DEFAULT_SOURCES).split(/[\s,]+/).filter(Boolean);

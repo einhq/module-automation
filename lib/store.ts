@@ -7,6 +7,15 @@ import { type Command, readBuckets, readRange, readTail, SYSTEM_TIME_ZONE } from
 import type { DeviceAttrs, DeviceInfo, DeviceSummary, EntityAttrs, EntitySummary, HistoryAggregate, Reading, Value } from './api.ts';
 import { DEVICE_TYPE, devicePath, DEVICES_ROOT, ENTITY_TYPE, entityPath, HISTORY_NAME, SET_NAME, SETTABLE_KINDS } from './paths.ts';
 
+/** A position's track: its path, its fixes and the time of the last, when there is one. */
+const trackOf = async (cmd: Command, device: string, entity: string): Promise<EntitySummary['track']> => {
+  const path = `${entityPath(device, entity)}/${HISTORY_NAME}`;
+  const node = await cmd.sys.vfs.get(cmd.access, path).catch(() => undefined);
+  if (!node || node.type !== 'track') return undefined;
+  const summary = (await cmd.sys.vfs.trackSummaries(cmd.access, [node.id])).get(node.id);
+  return { path, points: summary?.points ?? 0, ...(summary?.lastTs ? { lastAt: summary.lastTs } : {}) };
+};
+
 /** A command's failure, said once on stderr. */
 export const fail = async (cmd: Command, name: string, error: unknown): Promise<number> => {
   await cmd.writeError(`${name}: ${error instanceof Error ? error.message : error}\n`);
@@ -137,7 +146,8 @@ export const deviceInfo = async (cmd: Command, device: string): Promise<DeviceIn
   if (node.type !== DEVICE_TYPE) throw new Error(`${device} is not a device`);
   const entities = await entitiesOf(cmd, device);
   const lasts = await Promise.all(entities.map((entity) => lastOf(cmd, device, entity.name)));
-  const entityList = entities.map((entity, i) => entitySummary(device, entity, lasts[i]));
+  const tracks = await Promise.all(entities.map((entity) => entity.attrs.kind === 'position' ? trackOf(cmd, device, entity.name) : undefined));
+  const entityList = entities.map((entity, i) => ({ ...entitySummary(device, entity, lasts[i]), ...(tracks[i] ? { track: tracks[i] } : {}) }));
   const info: DeviceInfo = {
     ...summary(device, node.attrs, entities.length),
     ...(node.attrs.sw ? { sw: node.attrs.sw } : {}),
