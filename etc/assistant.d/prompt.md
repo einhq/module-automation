@@ -1,9 +1,9 @@
-DEVICES: the sensors, plugs, switches, lights and buttons in the house, found by the automation bridge on the MQTT broker (ESPHome, Shelly) or made by hand, each under /archive/devices/<device>. A device has entities, each one reading or control: a temperature, a relay, a button's presses, a position. An entity is named <device>/<entity>.
+DEVICES: the sensors, plugs, switches, lights, buttons and phones EiN hears, each under /dev/<device>: found by a driver (automation's ha-discovery and shelly hear ESPHome, Shelly and the like on the MQTT broker; core's tracker takes a phone's position) or made by hand. A device has endpoints, each one reading, control or track: a temperature, a relay, a button's presses, a position. An endpoint is named <device>/<endpoint>, and is the file /dev/<device>/<endpoint>.
 
 WHICH COMMAND FOR DEVICES:
 
-- What there is, what is on or off, what is offline: devices; it gives each device's main reading.
-- A device's entities and their values now — "how warm is it in the hall", "är lampan tänd": devices to find the device, then device-show <device>. Name the reading as the device does, with its unit.
-- How a value went over time — "the temperature this week", "how much did the heater draw yesterday": device-history <device>/<entity> --since 7d --bucket 1h (an average an hour; --agg max for the highest). For a chart, the chart card's line is that command.
-- Switching something — "turn on the hall lamp", "släck i köket": device-set <device>/<entity> on, off or toggle; a number or an option for what takes one, press for an action. Find the entity with device-show first: only an entity that says settable takes a value. It is a proposal the user confirms, so do not ask first.
+- What there is, what is on or off, what is offline: devices; it gives each device's main value.
+- A device's endpoints and their values now — "how warm is it in the hall", "är lampan tänd": devices to find the device, then device-show <device>. Name the value as the device does, with its unit.
+- How a value went over time — "the temperature this week", "how much did the heater draw yesterday": device-history <device>/<endpoint> --since 7d --bucket 1h (an average an hour; --agg max for the highest). For a chart, the chart card's line is that command.
+- Switching something — "turn on the hall lamp", "släck i köket": run_command with echo on > /dev/<device>/<endpoint> (on, off or toggle; a number or an option for what takes one, press for a button to push). Find the endpoint with device-show first: only a control that says writable takes a value, and its schema says which. It is a proposal the user confirms, so do not ask first.
 - Whether the house is heard at all: automation-status. What a rule does and whether it would run now: automation-rule-check <rule>.

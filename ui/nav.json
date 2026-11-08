@@ -1,5 +1,0 @@
-{
-  "sidebar": [
-    { "id": "automation.devices", "section": "browse", "label": "Devices", "icon": "plug", "to": "/devices", "order": 45, "signedIn": true }
-  ]
-}

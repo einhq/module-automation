@@ -1,21 +1,21 @@
 /**
- * The bridge: one MQTT connection, the sources listening on it, and the sink they feed. It
- * connects, subscribes to what each source listens on and to every topic a source asked for
+ * The bridge: one MQTT connection, the sources listening on it, and the device writer they feed.
+ * It connects, subscribes to what each source listens on and to every topic a source asked for
  * since, and hands each message to every source. When the connection is lost it connects again,
  * waiting 1 s, then twice as long each time up to a minute, so a broker that is away never ends
  * the service.
  *
- * A command is a write to an entity's `set` node (`device-set`), which the VFS checks against the
- * writer's rights. The bridge follows those writes in this process and sends what the entity's
- * source makes of them. A command given while the broker is away is dropped, not kept: a lamp
- * switched on an hour after it was asked would surprise.
+ * Each source is registered with core as the driver of the devices it finds, for as long as the
+ * bridge runs. A value written to one of their controls (`echo on > /dev/hall-plug/switch-0`),
+ * which core has checked against the control's schema and the writer's rights, is sent to the
+ * device as its source says it; the device's report of its new state comes back as a reading. A
+ * write while the broker is away is refused, not kept: a lamp switched on an hour after it was
+ * asked would surprise.
  */
 
-import type { Command, NodeEvent } from '@ein/client';
-import type { SetAttrs } from './api.ts';
-import type { Sink } from './model.ts';
+import type { Command, Driver, ModuleDevices } from '@ein/client';
+import { commandValue, type DeviceWriter } from './drivers.ts';
 import type { MqttConnect, MqttConnection, MqttMessage } from './mqtt.ts';
-import { DEVICES_ROOT, parseTarget, SET_NAME, SET_TYPE } from './paths.ts';
 import type { Publish, RunningSource, Update } from './sources/mod.ts';
 import { type BridgeState, setBridgeState } from './state.ts';
 
@@ -24,7 +24,8 @@ type BridgeOptions = {
   url: string;
   connect: MqttConnect;
   sources: RunningSource[];
-  sink: Sink;
+  devices: ModuleDevices;
+  writer: DeviceWriter;
   /** Resolves when the bridge is to stop. */
   stopped: Promise<void>;
 };
@@ -35,7 +36,7 @@ const MAX_BACKOFF_MS = 60_000;
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
 export const runBridge = async (options: BridgeOptions): Promise<void> => {
-  const { cmd, sources, sink, stopped } = options;
+  const { cmd, sources, writer, stopped } = options;
   const log = (line: string) => cmd.writeLn(`automation-bridge: ${line}`).catch(() => {});
   let stopping = false;
   stopped.then(() => stopping = true);
@@ -47,27 +48,34 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
 
   const state: BridgeState = {
     url: options.url,
-    sources: sources.map((source) => source.name),
+    drivers: sources.map((source) => source.name),
     connected: false,
     since: Date.now(),
     messages: 0,
     notes: () => sources.flatMap((source) => source.notes?.() ?? []),
-    devices: () => sink.deviceCount(),
-    entities: () => sink.entityCount(),
-    current: (device, entity) => sink.current(device, entity),
-    forget: async (device) => {
-      for (const source of sources) {
-        for (const publish of source.forget(device)) await send(publish).catch((error) => log(`clearing ${publish.topic}: ${message(error)}`));
-      }
-      await sink.forget(device);
-    },
   };
   setBridgeState(state);
 
   const send = async (publish: Publish): Promise<void> => {
-    if (!connection) throw new Error('not connected to the broker');
+    if (!connection) throw new Error('not connected to the broker, so nothing was sent');
     await connection.publish(publish.topic, publish.payload, { retain: publish.retain });
   };
+
+  const driverOf = (source: RunningSource): Driver => ({
+    description: source.description,
+    module: 'automation',
+    write: async ({ device, endpoint, value, by }) => {
+      const publishes = source.encode({ device, entity: endpoint, value: commandValue(value) });
+      if (!publishes?.length) throw new Error(`${source.name} has not heard how ${device}/${endpoint} is set`);
+      for (const publish of publishes) await send(publish);
+      log(`${device}/${endpoint} set to ${commandValue(value)} by ${by}`);
+    },
+    forget: async (device) => {
+      for (const publish of source.forget(device)) await send(publish).catch((error) => log(`clearing ${publish.topic}: ${message(error)}`));
+      await writer.forget(device);
+    },
+  });
+  const unregister = sources.map((source) => options.devices.registerDriver(source.name, driverOf(source)));
 
   const handle = (update: Update, source: RunningSource) => {
     if (update.kind === 'subscribe') {
@@ -77,7 +85,7 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
     } else if (update.kind === 'publish') {
       send(update.publish).catch((error) => log(`sending to ${update.publish.topic}: ${message(error)}`));
     } else {
-      sink.apply(update, source.name);
+      writer.apply(update, source.name);
     }
   };
 
@@ -95,26 +103,8 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
     }
   };
 
-  const onSet = (event: NodeEvent<SetAttrs>) => {
-    const target = parseTarget(event.path.slice(0, -`/${SET_NAME}`.length));
-    const value = event.node.attrs.value;
-    if (!target?.entity || typeof value !== 'string' || event.node.attrs.id === event.previousNode?.attrs.id) return;
-    const { device, entity } = target;
-    const source = sources.find((each) => each.owns(device));
-    const publishes = source?.encode({ device, entity, value, current: sink.current(device, entity) });
-    if (!publishes?.length) {
-      log(`${device}/${entity} cannot be set to ${value}: no source of this bridge sets it`);
-      return;
-    }
-    log(`${device}/${entity} set to ${value} by uid ${event.uid}`);
-    for (const publish of publishes) send(publish).catch((error) => log(`${device}/${entity} not set: ${message(error)}`));
-  };
-
-  const subscription = await cmd.sys.vfs.subscribe<SetAttrs>?.(() => cmd.access, onSet, { pathPrefix: DEVICES_ROOT, nodeTypes: [SET_TYPE], eventTypes: ['updated'] });
-  if (!subscription) await log('this store tells no one of writes: device-set does nothing');
-
   let backoff = MIN_BACKOFF_MS;
-  await log(`sources ${state.sources.join(', ')}; connecting to ${options.url}`);
+  await log(`drivers ${state.drivers.join(', ')}; connecting to ${options.url}`);
   while (!stopping) {
     try {
       connection = await options.connect(onMessage);
@@ -141,8 +131,8 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
     backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
   }
 
-  await subscription?.unsubscribe().catch(() => {});
-  await sink.close();
+  for (const each of unregister) each();
+  await writer.close();
   setBridgeState(undefined);
   await log('stopped');
 };

@@ -1,6 +1,7 @@
 #!ts
 /**
- * automation-status — whether the bridge hears the broker, and what it found.
+ * automation-status — whether the bridge hears the broker, which drivers it registered, how many
+ * devices they drive, and the rules.
  *
  *   automation-status            everything, as JSON in JSON mode
  *   automation-status --brief    one line, for the services list
@@ -8,12 +9,27 @@
  *   automation-status --rules    one line on the rules service
  */
 
+import type { DeviceAttrs } from '@ein/api';
 import type { CmdReturn, Command, HealthCheck } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { DEV_PATH, devicePath } from '@ein/paths';
 import type { AutomationStatus } from '@automation/api';
+import { SOURCE_NAMES } from '@automation/sources';
 import { bridgeState, rulesState } from '@automation/state';
 
-const statusOf = (cmd: Command): AutomationStatus => {
+const ENDPOINT_TYPES = new Set(['log', 'track', 'control']);
+
+/** The devices under /dev the caller sees that automation's drivers drive, and their endpoints. */
+const counts = async (cmd: Command): Promise<{ devices: number; endpoints: number }> => {
+  const children = await cmd.sys.vfs.children<DeviceAttrs>(cmd.access, DEV_PATH).catch(() => []);
+  const ours = children.filter((child) => child.node.type === 'device' && SOURCE_NAMES.includes(child.node.attrs.driver ?? ''));
+  const endpoints = await Promise.all(
+    ours.map(async (child) => (await cmd.sys.vfs.children(cmd.access, devicePath(child.name)).catch(() => [])).filter((each) => ENDPOINT_TYPES.has(each.node.type)).length),
+  );
+  return { devices: ours.length, endpoints: endpoints.reduce((sum, each) => sum + each, 0) };
+};
+
+const statusOf = async (cmd: Command): Promise<AutomationStatus> => {
   const url = (cmd.env.CFG_AUTOMATION_MQTT_URL ?? '').trim();
   const state = bridgeState();
   const rules = rulesState();
@@ -23,9 +39,8 @@ const statusOf = (cmd: Command): AutomationStatus => {
     running: state !== undefined,
     connected: state?.connected ?? false,
     ...(state ? { since: new Date(state.since).toISOString() } : {}),
-    sources: state?.sources ?? [],
-    devices: state?.devices() ?? 0,
-    entities: state?.entities() ?? 0,
+    drivers: state?.drivers ?? [],
+    ...await counts(cmd),
     messages: state?.messages ?? 0,
     unsupported: state?.notes() ?? [],
     ...(state?.lastError ? { lastError: state.lastError } : {}),
@@ -37,7 +52,7 @@ const brief = (status: AutomationStatus): string => {
   if (!status.configured) return 'off: no broker set';
   if (!status.running) return 'not running';
   if (!status.connected) return `cannot reach ${status.url}${status.lastError ? `: ${status.lastError}` : ''}`;
-  return `${status.devices} devices, ${status.entities} entities, ${status.messages} messages`;
+  return `${status.devices} devices, ${status.endpoints} endpoints, ${status.messages} messages`;
 };
 
 const checks = (status: AutomationStatus): HealthCheck[] => {
@@ -53,7 +68,7 @@ const automationStatus = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
   const flags = parseArgs(cmd.args, { boolean: ['brief', 'checks', 'rules'], unknown: collectUnknownFlags(unknown) });
   if (await reportUnknownFlags(cmd, unknown)) return 1;
-  const status = statusOf(cmd);
+  const status = await statusOf(cmd);
   if (flags.rules) {
     const rules = status.rules;
     await cmd.writeLn(rules ? `${rules.count} rules, ${rules.runs} runs${rules.problems.length ? `, ${rules.problems.length} not run` : ''}` : 'not running');
@@ -62,6 +77,7 @@ const automationStatus = async (cmd: Command): CmdReturn => {
   } else if (flags.brief || !cmd.json) {
     await cmd.writeLn(brief(status));
     if (!flags.brief) {
+      if (status.drivers.length) await cmd.writeLn(`drivers: ${status.drivers.join(', ')}`);
       for (const note of status.unsupported) await cmd.writeLn(`  not read: ${note}`);
       if (status.rules) await cmd.writeLn(`rules: ${status.rules.count}, ${status.rules.runs} runs`);
       for (const problem of status.rules?.problems ?? []) await cmd.writeLn(`  not run: ${problem}`);
@@ -75,14 +91,15 @@ const automationStatus = async (cmd: Command): CmdReturn => {
 automationStatus.spec = {
   name: 'automation-status',
   effect: 'read' as const,
-  description: 'Whether the automation bridge hears the MQTT broker, how many devices and entities it found, and which it cannot read',
+  description:
+    'Whether the automation bridge hears the MQTT broker, which drivers it registered, how many devices under /dev they drive, what they cannot read, and the rules',
   flags: [
     { name: 'brief', type: 'bool' as const, description: 'one line, as the services list shows it' },
     { name: 'checks', type: 'bool' as const, description: 'the checks health reads, as JSON' },
     { name: 'rules', type: 'bool' as const, description: 'one line on the rules service, as the services list shows it' },
   ],
   examples: ['automation-status', 'automation-status --brief'],
-  returns: 'AutomationStatus: configured, url, running, connected, since, sources, devices, entities, messages, unsupported, lastError, rules {count, runs, problems}',
+  returns: 'AutomationStatus: configured, url, running, connected, since, drivers, devices, endpoints, messages, unsupported, lastError, rules {count, runs, problems}',
 };
 
 export default automationStatus;

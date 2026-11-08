@@ -4,40 +4,40 @@
  *   description: The hall lamp follows the porch button
  *   when:                          # one trigger, or a list of them: any one fires the rule
  *     event: porch-button/input-0  # a press; `is: single` for one kind of press
- *   if:                            # all must hold, on the entities' latest values
+ *   if:                            # all must hold, on the endpoints' latest values
  *     - state: hall-sensor/illuminance
  *       below: 30
  *   then:                          # command lines, run in order as the rule file's owner
- *     - device-set hall-plug/switch-0 toggle
+ *     - echo toggle > /dev/hall-plug/switch-0
  *   cooldown: 5s                   # the least time between two runs
  *
- * Triggers: `state: <device>/<entity>` with any of `to`, `from`, `above`, `below` (fires when the
+ * Triggers: `state: <device>/<endpoint>` with any of `to`, `from`, `above`, `below` (fires when the
  * value comes to it, not while it stays) and `for: 10m` (it held that long); `event:` with `is`;
  * `online: <device>` with `is: true|false`; `at: "07:30"` (every day, in the system's time zone);
  * `every: 15m`. Conditions: `state:` with `is`, `not`, `above`, `below`; `online:` with `is`.
  */
 
-import type { Value } from './api.ts';
+import type { DeviceValue } from '@ein/api';
 import { parseDuration } from './time.ts';
 
 type StateTrigger = {
   kind: 'state';
   device: string;
-  entity: string;
-  to?: Value;
-  from?: Value;
+  endpoint: string;
+  to?: DeviceValue;
+  from?: DeviceValue;
   above?: number;
   below?: number;
   forMs?: number;
 };
-type EventTrigger = { kind: 'event'; device: string; entity: string; is?: string };
+type EventTrigger = { kind: 'event'; device: string; endpoint: string; is?: string };
 type OnlineTrigger = { kind: 'online'; device: string; is?: boolean };
 type AtTrigger = { kind: 'at'; minute: number };
 type EveryTrigger = { kind: 'every'; ms: number };
 export type Trigger = StateTrigger | EventTrigger | OnlineTrigger | AtTrigger | EveryTrigger;
 
 type Condition =
-  | { kind: 'state'; device: string; entity: string; is?: Value; not?: Value; above?: number; below?: number }
+  | { kind: 'state'; device: string; endpoint: string; is?: DeviceValue; not?: DeviceValue; above?: number; below?: number }
   | { kind: 'online'; device: string; is: boolean };
 
 export type Rule = {
@@ -52,18 +52,18 @@ export type Rule = {
 
 /** What arrived on the bus, as a rule sees it. */
 export type Message =
-  | { kind: 'state'; device: string; entity: string; value: Value }
-  | { kind: 'event'; device: string; entity: string; value: string }
+  | { kind: 'state'; device: string; endpoint: string; value: DeviceValue }
+  | { kind: 'event'; device: string; endpoint: string; value: string }
   | { kind: 'online'; device: string; online: boolean };
 
 type Mapping = { [key: string]: unknown };
 
 const isMapping = (value: unknown): value is Mapping => value !== null && typeof value === 'object' && !Array.isArray(value);
 
-const target = (text: unknown, what: string): { device: string; entity: string } => {
+const target = (text: unknown, what: string): { device: string; endpoint: string } => {
   const parts = typeof text === 'string' ? text.split('/') : [];
-  if (parts.length !== 2 || !parts[0] || !parts[1]) throw new Error(`${what} takes <device>/<entity>, not ${JSON.stringify(text)}`);
-  return { device: parts[0], entity: parts[1] };
+  if (parts.length !== 2 || !parts[0] || !parts[1]) throw new Error(`${what} takes <device>/<endpoint>, not ${JSON.stringify(text)}`);
+  return { device: parts[0], endpoint: parts[1] };
 };
 
 const number = (value: unknown, what: string): number | undefined => {
@@ -72,7 +72,7 @@ const number = (value: unknown, what: string): number | undefined => {
   return value;
 };
 
-const scalar = (value: unknown, what: string): Value | undefined => {
+const scalar = (value: unknown, what: string): DeviceValue | undefined => {
   if (value === undefined) return undefined;
   if (value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
   throw new Error(`${what} takes a value, not ${JSON.stringify(value)}`);
@@ -172,7 +172,7 @@ export const ruleFrom = (name: string, raw: unknown): Rule => {
 };
 
 /** Whether two values are the same, on and off as true and false, a number as its text. */
-const same = (value: Value | undefined, wanted: Value | undefined): boolean => {
+const same = (value: DeviceValue | undefined, wanted: DeviceValue | undefined): boolean => {
   if (value === undefined || wanted === undefined) return false;
   if (typeof value === 'boolean') {
     if (typeof wanted === 'boolean') return value === wanted;
@@ -183,10 +183,10 @@ const same = (value: Value | undefined, wanted: Value | undefined): boolean => {
   return String(value) === String(wanted);
 };
 
-const numeric = (value: Value | undefined): number | undefined => typeof value === 'number' ? value : undefined;
+const numeric = (value: DeviceValue | undefined): number | undefined => typeof value === 'number' ? value : undefined;
 
 /** Whether a value is what a state trigger waits for: all its `to`, `above` and `below` at once. */
-export const holds = (trigger: { to?: Value; above?: number; below?: number }, value: Value | undefined): boolean => {
+export const holds = (trigger: { to?: DeviceValue; above?: number; below?: number }, value: DeviceValue | undefined): boolean => {
   if (trigger.to !== undefined && !same(value, trigger.to)) return false;
   const n = numeric(value);
   if (trigger.above !== undefined && !(n !== undefined && n > trigger.above)) return false;
@@ -195,43 +195,44 @@ export const holds = (trigger: { to?: Value; above?: number; below?: number }, v
 };
 
 /**
- * Whether a message fires a trigger, given the entity's value before it. A state trigger fires
+ * Whether a message fires a trigger, given the endpoint's value before it. A state trigger fires
  * when its value comes to what the trigger waits for, not again while it stays there; with nothing
  * to wait for, on any change.
  */
-export const fires = (trigger: Trigger, message: Message, previous: Value | undefined): boolean => {
+export const fires = (trigger: Trigger, message: Message, previous: DeviceValue | undefined): boolean => {
   if (trigger.kind === 'event') {
-    return message.kind === 'event' && message.device === trigger.device && message.entity === trigger.entity && (trigger.is === undefined || message.value === trigger.is);
+    return message.kind === 'event' && message.device === trigger.device && message.endpoint === trigger.endpoint &&
+      (trigger.is === undefined || message.value === trigger.is);
   }
   if (trigger.kind === 'online') {
     return message.kind === 'online' && message.device === trigger.device && (trigger.is === undefined || message.online === trigger.is);
   }
-  if (trigger.kind !== 'state' || message.kind !== 'state' || message.device !== trigger.device || message.entity !== trigger.entity) return false;
+  if (trigger.kind !== 'state' || message.kind !== 'state' || message.device !== trigger.device || message.endpoint !== trigger.endpoint) return false;
   if (trigger.from !== undefined && !same(previous, trigger.from)) return false;
   const waits = trigger.to !== undefined || trigger.above !== undefined || trigger.below !== undefined;
   if (!waits) return previous === undefined || !same(message.value, previous);
   return holds(trigger, message.value) && !holds(trigger, previous);
 };
 
-/** Whether a condition holds, given the latest values (`<device>/<entity>`) and who is online. */
-export const meets = (condition: Condition, values: Map<string, Value>, online: Map<string, boolean>): boolean => {
+/** Whether a condition holds, given the latest values (`<device>/<endpoint>`) and who is online. */
+export const meets = (condition: Condition, values: Map<string, DeviceValue>, online: Map<string, boolean>): boolean => {
   if (condition.kind === 'online') return (online.get(condition.device) ?? false) === condition.is;
-  const value = values.get(`${condition.device}/${condition.entity}`);
+  const value = values.get(`${condition.device}/${condition.endpoint}`);
   if (value === undefined) return false;
   if (condition.is !== undefined && !same(value, condition.is)) return false;
   if (condition.not !== undefined && same(value, condition.not)) return false;
   return holds({ above: condition.above, below: condition.below }, value);
 };
 
-/** The entities a rule reads, as `<device>/<entity>`: what the engine needs the latest value of. */
-export const entitiesOf = (rule: Rule): string[] => [
+/** The endpoints a rule reads, as `<device>/<endpoint>`: what the engine needs the latest value of. */
+export const endpointsOf = (rule: Rule): string[] => [
   ...new Set([
-    ...rule.when.flatMap((trigger) => trigger.kind === 'state' ? [`${trigger.device}/${trigger.entity}`] : []),
-    ...rule.if.flatMap((condition) => condition.kind === 'state' ? [`${condition.device}/${condition.entity}`] : []),
+    ...rule.when.flatMap((trigger) => trigger.kind === 'state' ? [`${trigger.device}/${trigger.endpoint}`] : []),
+    ...rule.if.flatMap((condition) => condition.kind === 'state' ? [`${condition.device}/${condition.endpoint}`] : []),
   ]),
 ];
 
-const show = (value: Value | undefined): string => JSON.stringify(value);
+const show = (value: DeviceValue | undefined): string => JSON.stringify(value);
 
 /** A trigger as a person would write it. */
 export const triggerText = (trigger: Trigger): string => {
@@ -244,10 +245,10 @@ export const triggerText = (trigger: Trigger): string => {
         trigger.below !== undefined ? `below ${trigger.below}` : '',
         trigger.forMs ? `for ${trigger.forMs / 1000} s` : '',
       ].filter(Boolean);
-      return `${trigger.device}/${trigger.entity} changes${parts.length ? ` ${parts.join(' ')}` : ''}`;
+      return `${trigger.device}/${trigger.endpoint} changes${parts.length ? ` ${parts.join(' ')}` : ''}`;
     }
     case 'event':
-      return `${trigger.device}/${trigger.entity} is pressed${trigger.is ? ` (${trigger.is})` : ''}`;
+      return `${trigger.device}/${trigger.endpoint} is pressed${trigger.is ? ` (${trigger.is})` : ''}`;
     case 'online':
       return `${trigger.device} ${trigger.is === false ? 'goes offline' : trigger.is === true ? 'comes online' : 'comes or goes'}`;
     case 'at':
@@ -266,5 +267,5 @@ export const conditionText = (condition: Condition): string => {
     condition.above !== undefined ? `above ${condition.above}` : '',
     condition.below !== undefined ? `below ${condition.below}` : '',
   ].filter(Boolean);
-  return `${condition.device}/${condition.entity} ${parts.join(' ') || 'has a value'}`;
+  return `${condition.device}/${condition.endpoint} ${parts.join(' ') || 'has a value'}`;
 };

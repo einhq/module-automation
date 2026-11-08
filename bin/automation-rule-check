@@ -11,7 +11,12 @@ import type { RuleCheck } from '@automation/api';
 import { RULES_DIR } from '@automation/paths';
 import { latestValues, onlineDevices, readRuleFile } from '@automation/rule-files';
 import { conditionText, meets, triggerText } from '@automation/rules';
-import { fail } from '@automation/store';
+
+/** A command's failure, said once on stderr. */
+const fail = async (cmd: Command, error: unknown): Promise<number> => {
+  await cmd.writeError(`automation-rule-check: ${error instanceof Error ? error.message : error}\n`);
+  return 1;
+};
 
 /** The account with `uid`, by name when there is one. */
 const nameOf = async (cmd: Command, uid: number): Promise<string> => {
@@ -29,7 +34,7 @@ const automationRuleCheck = async (cmd: Command): CmdReturn => {
   const flags = parseArgs(cmd.args, { boolean: ['run'], unknown: collectUnknownFlags(unknown) });
   if (await reportUnknownFlags(cmd, unknown)) return 1;
   const target = flags._[0] === undefined ? '' : String(flags._[0]);
-  if (!target) return await fail(cmd, 'automation-rule-check', 'usage: automation-rule-check <rule or file> [--run]');
+  if (!target) return await fail(cmd, 'usage: automation-rule-check <rule or file> [--run]');
   const path = target.includes('/') ? (target.startsWith('/') ? target : `${cmd.cwd}/${target}`) : `${RULES_DIR}/${target.replace(/\.yaml$/, '')}.yaml`;
   try {
     const file = await readRuleFile(cmd, path);
@@ -68,7 +73,7 @@ const automationRuleCheck = async (cmd: Command): CmdReturn => {
     if (file.problem) return 1;
     return check.ran?.some((each) => each.code !== 0) ? 1 : 0;
   } catch (error) {
-    return await fail(cmd, 'automation-rule-check', error);
+    return await fail(cmd, error);
   }
 };
 

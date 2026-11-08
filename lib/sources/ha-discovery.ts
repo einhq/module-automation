@@ -12,10 +12,10 @@
  * skipped and listed by `notes()`.
  */
 
-import type { EntityKind, Value } from '../api.ts';
-import { labelOf, slug } from '../slug.ts';
+import { deviceName, type DeviceValue } from '@ein/api';
+import { labelOf } from './label.ts';
 import { compileTemplate, type Template } from './template.ts';
-import type { Command, MqttSource, Publish, Update } from './types.ts';
+import type { Command, EntityKind, MqttSource, Publish, Update } from './types.ts';
 
 /** Home Assistant's abbreviations of the keys this source reads. */
 const ABBREVIATIONS: Record<string, string> = {
@@ -87,7 +87,7 @@ const withBase = (topic: string | undefined, base: string | undefined): string |
 };
 
 /** A reading's value: a number when it reads as one, null for Home Assistant's "nothing yet". */
-const sensorValue = (raw: unknown): Value => {
+const sensorValue = (raw: unknown): DeviceValue => {
   if (raw === undefined || raw === null) return null;
   if (typeof raw === 'number' || typeof raw === 'boolean') return raw;
   const text = String(raw).trim();
@@ -97,7 +97,7 @@ const sensorValue = (raw: unknown): Value => {
 };
 
 /** On, off, or neither, by the entity's own words for them. */
-const onOff = (raw: unknown, on: string, off: string): Value => {
+const onOff = (raw: unknown, on: string, off: string): DeviceValue => {
   if (typeof raw === 'boolean') return raw;
   const text = raw === undefined || raw === null ? '' : String(raw).trim();
   if (text === on) return true;
@@ -141,9 +141,9 @@ export const createHaDiscovery = (options: HaDiscoveryOptions = {}): MqttSource 
 
   /** An entity name not yet taken on the device by another config. */
   const entityName = (device: string, objectId: string, component: string, configTopic: string): string => {
-    const base = slug(objectId) || slug(component);
+    const base = deviceName(objectId) || deviceName(component);
     const taken = [...known.entries()].some(([topic, each]) => topic !== configTopic && each.device === device && each.entity === base);
-    return taken ? `${base}-${slug(component)}` : base;
+    return taken ? `${base}-${deviceName(component)}` : base;
   };
 
   const announce = (configTopic: string, component: string, nodeId: string | undefined, objectId: string, config: Config): Update[] => {
@@ -152,10 +152,10 @@ export const createHaDiscovery = (options: HaDiscoveryOptions = {}): MqttSource 
     const identifiers = Array.isArray(deviceInfo.identifiers) ? deviceInfo.identifiers : [deviceInfo.identifiers];
     const connections = Array.isArray(deviceInfo.connections) ? deviceInfo.connections as unknown[][] : [];
     const mac = connections.find((pair) => Array.isArray(pair) && pair[0] === 'mac')?.[1];
-    const device = slug(nodeId ?? str(identifiers[0]) ?? str(deviceInfo.name) ?? objectId);
+    const device = deviceName(nodeId ?? str(identifiers[0]) ?? str(deviceInfo.name) ?? objectId);
     if (!device) return [];
     if (!kind) {
-      skipped.set(`${device}/${slug(objectId)}`, `component ${component} is not read`);
+      skipped.set(`${device}/${deviceName(objectId)}`, `component ${component} is not read`);
       return [];
     }
     const base = str(config['~']);
@@ -170,7 +170,7 @@ export const createHaDiscovery = (options: HaDiscoveryOptions = {}): MqttSource 
         label: str(deviceInfo.name) ?? nodeId ?? device,
         manufacturer: str(deviceInfo.manufacturer),
         model: str(deviceInfo.model),
-        sw: str(deviceInfo.sw_version),
+        firmware: str(deviceInfo.sw_version),
         mac: typeof mac === 'string' ? mac.toLowerCase() : undefined,
       });
     }
@@ -197,7 +197,7 @@ export const createHaDiscovery = (options: HaDiscoveryOptions = {}): MqttSource 
     const commandTopic = withBase(str(config.command_topic), base);
     const payloadOn = str(config.payload_on) ?? 'ON';
     const payloadOff = str(config.payload_off) ?? 'OFF';
-    const state = (value: Value, retained: boolean): Update[] => [{ kind: 'state', device, entity, value, retained }];
+    const state = (value: DeviceValue, retained: boolean): Update[] => [{ kind: 'state', device, entity, value, retained }];
     let settable = false;
 
     if (component === 'sensor' || component === 'number' || component === 'select' || component === 'text') {
@@ -223,8 +223,8 @@ export const createHaDiscovery = (options: HaDiscoveryOptions = {}): MqttSource 
       });
       if (commandTopic) {
         settable = true;
-        commands.set(`${device}/${entity}`, ({ value, current }) => {
-          const on = value === 'toggle' ? current !== true : value === 'on';
+        commands.set(`${device}/${entity}`, ({ value }) => {
+          const on = value === 'on';
           const payload = json ? JSON.stringify({ state: on ? 'ON' : 'OFF' }) : on ? payloadOn : payloadOff;
           return [{ topic: commandTopic, payload }];
         });
@@ -284,6 +284,7 @@ export const createHaDiscovery = (options: HaDiscoveryOptions = {}): MqttSource 
       options: Array.isArray(config.options) ? config.options.filter((option): option is string => typeof option === 'string') : undefined,
       min: num(config.min),
       max: num(config.max),
+      step: num(config.step),
       settable,
       supported: problem === undefined,
       problem,
@@ -305,8 +306,8 @@ export const createHaDiscovery = (options: HaDiscoveryOptions = {}): MqttSource 
 
   return {
     name: 'ha-discovery',
+    description: 'Devices that announce themselves over MQTT the way Home Assistant reads them: ESPHome, Zigbee2MQTT and others',
     topics: () => [`${prefix}/+/+/config`, `${prefix}/+/+/+/config`],
-    owns: (device) => devices.has(device),
     forget(device) {
       const topics = [...known.entries()].filter(([, each]) => each.device === device).map(([topic]) => topic);
       for (const topic of topics) forget(topic);

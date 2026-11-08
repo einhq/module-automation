@@ -5,11 +5,12 @@
  * the owner. That is the rule sshd keeps for a key file, and `chmod 644` is the way out.
  */
 
+import type { DeviceAttrs, DeviceValue } from '@ein/api';
 import { type Command, readTail, SYSTEM_TIME_ZONE } from '@ein/client';
+import { DEV_PATH, devicePath } from '@ein/paths';
 import { parse } from '@std/yaml';
-import type { DeviceAttrs, Reading, Value } from './api.ts';
-import { DEVICE_TYPE, DEVICES_ROOT, entityPath, HISTORY_NAME, RULES_DIR } from './paths.ts';
-import { entitiesOf, type Rule, ruleFrom } from './rules.ts';
+import { RULES_DIR } from './paths.ts';
+import { endpointsOf, type Rule, ruleFrom } from './rules.ts';
 
 export type RuleFile = {
   name: string;
@@ -52,23 +53,26 @@ export const readRuleFiles = async (cmd: Command): Promise<RuleFile[]> => {
   return await Promise.all(names.map((name) => readRuleFile(cmd, `${RULES_DIR}/${name}`)));
 };
 
-/** The latest value of each entity the rules read, from their histories, by `<device>/<entity>`. */
-export const latestValues = async (cmd: Command, rules: Rule[]): Promise<Map<string, Value>> => {
-  const values = new Map<string, Value>();
-  for (const key of new Set(rules.flatMap(entitiesOf))) {
-    const [device, entity] = key.split('/');
-    const [last] = await readTail<Reading>(cmd.sys.vfs, cmd.access, `${entityPath(device, entity)}/${HISTORY_NAME}`, 1);
-    if (last?.value && typeof last.value === 'object' && 'value' in last.value) values.set(key, last.value.value);
+/**
+ * The latest value of each endpoint the rules read, by `<device>/<endpoint>`: the last entry of
+ * `/dev/<device>/<endpoint>`. One the caller may not read, or that is missing, has none.
+ */
+export const latestValues = async (cmd: Command, rules: Rule[]): Promise<Map<string, DeviceValue>> => {
+  const values = new Map<string, DeviceValue>();
+  for (const key of new Set(rules.flatMap(endpointsOf))) {
+    const [device, endpoint] = key.split('/');
+    const [last] = await readTail<{ value?: DeviceValue }>(cmd.sys.vfs, cmd.access, `${devicePath(device)}/${endpoint}`, 1).catch(() => []);
+    if (last?.value && typeof last.value === 'object' && 'value' in last.value && last.value.value !== undefined) values.set(key, last.value.value);
   }
   return values;
 };
 
-/** Whether each device is online, as far as it said. */
+/** Whether each device under /dev is online, as far as its driver said. */
 export const onlineDevices = async (cmd: Command): Promise<Map<string, boolean>> => {
   const online = new Map<string, boolean>();
-  const children = await cmd.sys.vfs.children<DeviceAttrs>(cmd.access, DEVICES_ROOT).catch(() => []);
+  const children = await cmd.sys.vfs.children<DeviceAttrs>(cmd.access, DEV_PATH).catch(() => []);
   for (const child of children) {
-    if (child.node.type === DEVICE_TYPE && typeof child.node.attrs.online === 'boolean') online.set(child.name, child.node.attrs.online);
+    if (child.node.type === 'device' && typeof child.node.attrs.online === 'boolean') online.set(child.name, child.node.attrs.online);
   }
   return online;
 };

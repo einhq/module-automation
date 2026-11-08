@@ -16,8 +16,14 @@ Deno.test('ha-discovery: an ESPHome sensor', async (t) => {
 
   await t.step('is a device named by its node id, with its maker and MAC', () => {
     const device = of(announced, 'device')[0];
-    assertEquals([device.device, device.label, device.manufacturer, device.model, device.mac], ['hall-sensor', 'hall-sensor', 'Espressif', 'esp32dev', 'a4cf12000001']);
-    assertEquals(source.owns('hall-sensor'), true);
+    assertEquals([device.device, device.label, device.manufacturer, device.model, device.firmware, device.mac], [
+      'hall-sensor',
+      'hall-sensor',
+      'Espressif',
+      'esp32dev',
+      '2025.10.0 (ESPHome)',
+      'a4cf12000001',
+    ]);
   });
 
   await t.step('each announcement is an entity, named by its object id', () => {
@@ -47,10 +53,9 @@ Deno.test('ha-discovery: an ESPHome sensor', async (t) => {
     assertEquals(of(source.decode('hall-sensor/sensor/temperature/state', '21.5', true), 'state')[0].retained, true);
   });
 
-  await t.step('the switch is switched with its own payloads; a toggle goes against its state', () => {
+  await t.step('the switch is switched with its own payloads', () => {
     assertEquals(source.encode({ device: 'hall-sensor', entity: 'relay', value: 'on' }), [{ topic: 'hall-sensor/switch/relay/command', payload: 'ON' }]);
     assertEquals(source.encode({ device: 'hall-sensor', entity: 'relay', value: 'off' }), [{ topic: 'hall-sensor/switch/relay/command', payload: 'OFF' }]);
-    assertEquals(source.encode({ device: 'hall-sensor', entity: 'relay', value: 'toggle', current: true }), [{ topic: 'hall-sensor/switch/relay/command', payload: 'OFF' }]);
     assertEquals(source.encode({ device: 'hall-sensor', entity: 'temperature', value: 'on' }), undefined);
   });
 
@@ -65,8 +70,8 @@ Deno.test('ha-discovery: an ESPHome sensor', async (t) => {
       [esphomeConfigs[0].topic, '', true],
       [esphomeConfigs[2].topic, '', true],
     ]);
-    assertEquals(source.owns('hall-sensor'), false);
     assertEquals(source.decode('hall-sensor/sensor/temperature/state', '22', false), []);
+    assertEquals(source.encode({ device: 'hall-sensor', entity: 'relay', value: 'on' }), undefined);
   });
 });
 
@@ -90,6 +95,13 @@ Deno.test('ha-discovery: templates, a shared state topic, and what it cannot rea
     const config = JSON.stringify({ name: 'Heating', dev: { ids: 'x1', name: 'x' } });
     assertEquals(source.decode('homeassistant/climate/x/heating/config', config, true), []);
     assertEquals(source.notes().includes('x/heating: component climate is not read'), true);
+  });
+
+  await t.step('a number says its range and step, and is set with the number as its payload', () => {
+    const config = JSON.stringify({ name: 'Target', stat_t: 'x/target', cmd_t: 'x/target/set', min: 5, max: 30, step: 0.5, dev: { ids: 'x1', name: 'x' } });
+    const entity = of(source.decode('homeassistant/number/x/target/config', config, true), 'entity')[0];
+    assertEquals([entity.entityKind, entity.min, entity.max, entity.step, entity.settable], ['number', 5, 30, 0.5, true]);
+    assertEquals(source.encode({ device: 'x', entity: 'target', value: '21.5' }), [{ topic: 'x/target/set', payload: '21.5' }]);
   });
 
   await t.step('a retained press is not a press', () => {
@@ -144,7 +156,7 @@ Deno.test('shelly: a plug and a four-button input', async (t) => {
     const answer = shellyPlug.deviceInfo('s', asked);
     const device = of(fresh.decode(answer.topic, answer.payload, false), 'device')[0];
     assertExists(device);
-    assertEquals([device.label, device.manufacturer, device.model, device.sw, device.mac], ['Hall plug', 'Shelly', 'S3PL-00112EU', '1.4.4', 'a8032ab12345']);
+    assertEquals([device.label, device.manufacturer, device.model, device.firmware, device.mac], ['Hall plug', 'Shelly', 'S3PL-00112EU', '1.4.4', 'a8032ab12345']);
   });
 
   await t.step('online and offline', () => {
@@ -159,12 +171,12 @@ Deno.test('shelly: a plug and a four-button input', async (t) => {
     assertEquals(of(source.decode(shellyButton.press.topic, shellyButton.press.payload, true), 'event'), []);
   });
 
-  await t.step('the switch is set and toggled over JSON-RPC', () => {
+  await t.step('the switch is set over JSON-RPC', () => {
     const set = source.encode({ device: 'hall-plug', entity: 'switch-0', value: 'off' });
     assertEquals(set?.[0].topic, 'hall-plug/rpc');
     const call = JSON.parse(set![0].payload);
     assertEquals([call.src, call.method, call.params], ['ein-automation-test', 'Switch.Set', { id: 0, on: false }]);
-    assertEquals(JSON.parse(source.encode({ device: 'hall-plug', entity: 'switch-0', value: 'toggle' })![0].payload).method, 'Switch.Toggle');
+    assertEquals(JSON.parse(source.encode({ device: 'hall-plug', entity: 'switch-0', value: 'on' })![0].payload).params, { id: 0, on: true });
     assertEquals(source.encode({ device: 'hall-plug', entity: 'switch-0-power', value: 'on' }), undefined);
   });
 

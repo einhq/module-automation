@@ -1,5 +1,5 @@
 /**
- * The rule engine: the latest value of every entity a rule reads and who is online, and which rules
+ * The rule engine: the latest value of every endpoint a rule reads and who is online, and which rules
  * a message or the clock makes run. A run is handed to `run` and not awaited; the engine only says
  * when.
  *
@@ -9,7 +9,7 @@
  * hold, then not again within its cooldown.
  */
 
-import type { Value } from './api.ts';
+import type { DeviceValue } from '@ein/api';
 import { fires, holds, meets, type Message, type Rule, type Trigger } from './rules.ts';
 
 export type Firing = { rule: Rule; why: string };
@@ -27,7 +27,7 @@ const describe = (trigger: Trigger, message?: Message): string => {
   switch (trigger.kind) {
     case 'state':
     case 'event':
-      return `${trigger.device}/${trigger.entity} ${message && 'value' in message ? JSON.stringify(message.value) : ''}`.trim();
+      return `${trigger.device}/${trigger.endpoint} ${message && 'value' in message ? JSON.stringify(message.value) : ''}`.trim();
     case 'online':
       return `${trigger.device} ${message?.kind === 'online' && !message.online ? 'offline' : 'online'}`;
     case 'at':
@@ -39,7 +39,7 @@ const describe = (trigger: Trigger, message?: Message): string => {
 
 export class RuleEngine {
   private rules: Rule[] = [];
-  private readonly values = new Map<string, Value>();
+  private readonly values = new Map<string, DeviceValue>();
   private readonly online = new Map<string, boolean>();
   private readonly lastRun = new Map<string, number>();
   private readonly waiting = new Map<string, () => void>();
@@ -60,8 +60,8 @@ export class RuleEngine {
     return this.rules.length;
   }
 
-  /** An entity's value from before the engine started, unless a message already said a newer one. */
-  seed(key: string, value: Value): void {
+  /** An endpoint's value from before the engine started, unless a message already said a newer one. */
+  seed(key: string, value: DeviceValue): void {
     if (!this.values.has(key)) this.values.set(key, value);
   }
 
@@ -70,13 +70,13 @@ export class RuleEngine {
   }
 
   handle(message: Message): void {
-    const key = message.kind === 'online' ? undefined : `${message.device}/${message.entity}`;
+    const key = message.kind === 'online' ? undefined : `${message.device}/${message.endpoint}`;
     const previous = message.kind === 'state' ? this.values.get(key!) : undefined;
     if (message.kind === 'state') this.values.set(key!, message.value);
     if (message.kind === 'online') this.online.set(message.device, message.online);
     for (const rule of this.rules) {
       rule.when.forEach((trigger, index) => {
-        if (trigger.kind === 'state' && trigger.forMs && message.kind === 'state' && message.device === trigger.device && message.entity === trigger.entity) {
+        if (trigger.kind === 'state' && trigger.forMs && message.kind === 'state' && message.device === trigger.device && message.endpoint === trigger.endpoint) {
           const id = `${rule.name}#${index}`;
           if (!holds(trigger, message.value)) {
             this.waiting.get(id)?.();

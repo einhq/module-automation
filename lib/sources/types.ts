@@ -2,11 +2,26 @@
  * What a source tells the bridge, and what the bridge asks of a source.
  *
  * A source turns what a device says into `Update`s and a command into what the device
- * understands. It knows nothing of nodes or the bus: the sink (`lib/model.ts`) makes those of its
- * updates. Device and entity names are already slugs (`lib/slug.ts`).
+ * understands. It knows nothing of nodes or the bus: the bridge's device writer (`lib/drivers.ts`)
+ * makes devices and endpoints of its updates. Device and entity names are already names core
+ * takes (`deviceName`).
  */
 
-import type { EntityCategory, EntityKind, Value } from '../api.ts';
+import type { DeviceValue, EndpointCategory } from '@ein/api';
+
+/**
+ * What one entity of a device is:
+ *
+ * - `sensor` — a reading, a number with a unit or a word
+ * - `binary` — something on or off that is only read: a door, motion, an input
+ * - `switch` — on or off, and can be switched
+ * - `light` — a switch that is a light
+ * - `number` — a number that can be set
+ * - `text` — a word that can be chosen, from `options` when there are some
+ * - `button` — a physical button: its presses are events, not a state
+ * - `action` — something that can be done, with no state: a restart, a doorbell's chime
+ */
+export type EntityKind = 'sensor' | 'binary' | 'switch' | 'light' | 'number' | 'text' | 'button' | 'action';
 
 /** A device was announced, or said more about itself. */
 export type DeviceUpdate = {
@@ -15,7 +30,7 @@ export type DeviceUpdate = {
   label: string;
   manufacturer?: string;
   model?: string;
-  sw?: string;
+  firmware?: string;
   mac?: string;
 };
 
@@ -28,10 +43,11 @@ export type EntityUpdate = {
   entityKind: EntityKind;
   unit?: string;
   deviceClass?: string;
-  category?: EntityCategory;
+  category?: EndpointCategory;
   options?: string[];
   min?: number;
   max?: number;
+  step?: number;
   settable: boolean;
   supported: boolean;
   /** Why it is not supported. */
@@ -39,16 +55,16 @@ export type EntityUpdate = {
 };
 
 /** An entity's state. */
-type StateUpdate = {
+export type StateUpdate = {
   kind: 'state';
   device: string;
   entity: string;
-  value: Value;
+  value: DeviceValue;
   retained: boolean;
 };
 
 /** A button was pressed: `value` is how (`single`, `double`, `long`, …). */
-type EventUpdate = {
+export type EventUpdate = {
   kind: 'event';
   device: string;
   entity: string;
@@ -56,14 +72,14 @@ type EventUpdate = {
 };
 
 /** A device came online or went away. */
-type OnlineUpdate = {
+export type OnlineUpdate = {
   kind: 'online';
   device: string;
   online: boolean;
 };
 
 /** A device stopped announcing an entity. */
-type RetireUpdate = {
+export type RetireUpdate = {
   kind: 'retire';
   device: string;
   entity: string;
@@ -81,38 +97,34 @@ type PublishUpdate = {
   publish: Publish;
 };
 
-export type Update =
-  | DeviceUpdate
-  | EntityUpdate
-  | StateUpdate
-  | EventUpdate
-  | OnlineUpdate
-  | RetireUpdate
-  | SubscribeUpdate
-  | PublishUpdate;
+/** What a source says of its devices, which the device writer applies. */
+export type DeviceChange = DeviceUpdate | EntityUpdate | StateUpdate | EventUpdate | OnlineUpdate | RetireUpdate;
+
+export type Update = DeviceChange | SubscribeUpdate | PublishUpdate;
 
 /** One MQTT message to send. */
 export type Publish = { topic: string; payload: string; retain?: boolean };
 
-/** A value someone asked an entity for, normalized by `device-set`: `on`, `off`, `toggle`, a number, a word. */
-export type Command = { device: string; entity: string; value: string; current?: Value };
+/** A value written to an entity, as text: `on`, `off`, a number, a word, `press`. */
+export type Command = { device: string; entity: string; value: string };
 
 /**
- * A source that listens on the bridge's MQTT connection.
+ * A source that listens on the bridge's MQTT connection, and the driver of the devices it finds.
  *
  * `decode` is given every message on the topics it subscribed to and on the topics it asked for
  * with a `subscribe` update; it ignores the ones that are not its. It may remember what it saw
  * (which topic is which entity's state), so one instance serves one connection.
  */
 export interface MqttSource {
+  /** Its name, which is its driver's: `ha-discovery`, `shelly`. */
   readonly name: string;
+  /** What its driver is, as `devices --drivers` says it. */
+  readonly description: string;
   /** The topic filters it listens on from the start. */
   topics(): string[];
   decode(topic: string, payload: string, retained: boolean): Update[];
   /** What to send for a command to one of its entities; undefined when it is not its or cannot be set. */
   encode(command: Command): Publish[] | undefined;
-  /** Whether a device is this source's. */
-  owns(device: string): boolean;
   /**
    * Let go of a device: what it knows of it, and the messages to send so the broker stops
    * replaying the device's announcements (empty retained ones).

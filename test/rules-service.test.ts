@@ -1,7 +1,9 @@
 /**
  * The rules service in a booted EiN with the bridge and a broker of the test's own: a rule a member
- * of the automation group writes runs on a press as her, and no more than she may; each run is
- * logged; a rule others may change is not run; and automation-rule-check says all that.
+ * of the automation group writes runs on a press, read from the devices' messages on the bus, as
+ * her and no more than she may; it switches a plug by writing its control; each run is logged; a
+ * rule others may change is not run; and automation-rule-check says all that, with the values the
+ * rule's conditions read from /dev.
  */
 
 import { assertEquals } from '@std/assert';
@@ -52,25 +54,27 @@ Deno.test({ name: 'automation rules', sanitizeResources: false, sanitizeOps: fal
     const bo = await signIn('bo');
     broker.publish(shellyPlug.online.topic, shellyPlug.online.payload, { retain: true });
     broker.publish(shellyPlug.switchStatus.topic, shellyPlug.switchStatus.payload);
-    await until('the plug', () => anna.execString('device-show hall-plug'), (text) => text.includes('switch-0'));
+    await until('the plug', () => anna.execString('device-show hall-plug'), (text) => text.includes('switch-0-power'));
 
     await t.step('a member writes a rule; the service reads it', async () => {
       const rule = {
         description: 'The porch button switches the hall plug',
         when: { event: 'porch-button/input-0', is: 'single' },
-        then: ['device-set hall-plug/switch-0 toggle', 'echo fired > /home/anna/fired.txt'],
+        if: { state: 'hall-plug/switch-0-power', above: 10 },
+        then: ['echo toggle > /dev/hall-plug/switch-0', 'echo fired > /home/anna/fired.txt'],
       };
       await anna.execString(`echo '${ruleText(rule)}' > /etc/automation/rules/porch.yaml && chmod 644 /etc/automation/rules/porch.yaml`);
       await until('loaded', () => admin.execJson<AutomationStatus>('automation-status'), (status) => status.rules?.count === 1);
     });
 
-    await t.step('a press runs it, as its owner', async () => {
+    await t.step('a press runs it, as its owner, and the plug, which reported on, is switched off', async () => {
       broker.publish(shellyButton.press.topic, shellyButton.press.payload);
-      await until(
-        'Switch.Toggle',
-        async () => broker.published.filter((message) => message.topic === 'hall-plug/rpc').map((message) => JSON.parse(message.payload).method),
-        (methods) => methods.includes('Switch.Toggle'),
+      const calls = await until(
+        'Switch.Set',
+        async () => broker.published.filter((message) => message.topic === 'hall-plug/rpc').map((message) => JSON.parse(message.payload)),
+        (calls) => calls.some((call) => call.method === 'Switch.Set'),
       );
+      assertEquals(calls.find((call) => call.method === 'Switch.Set').params, { id: 0, on: false });
       const fired = await until('fired.txt', () => admin.execJson<{ props: { uid: number } }>('stat /home/anna/fired.txt'), () => true);
       assertEquals(fired.props.uid, (await admin.execJson<{ uid: number }>('user-info anna')).uid);
     });
@@ -103,6 +107,7 @@ Deno.test({ name: 'automation rules', sanitizeResources: false, sanitizeOps: fal
     await t.step('automation-rule-check says what makes a rule run and whose rights it runs with', async () => {
       const check = await anna.execJson<RuleCheck>('automation-rule-check porch');
       assertEquals([check.owner, check.when, check.then?.length], ['anna', ['porch-button/input-0 is pressed (single)'], 2]);
+      assertEquals(check.if, [{ condition: 'hall-plug/switch-0-power above 10', holds: true }]);
       assertEquals((await anna.exec('automation-rule-check shared')).success, false);
     });
 

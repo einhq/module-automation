@@ -20,18 +20,18 @@ if:
   - state: hall-sensor/illuminance
     below: 30
   - online: hall-plug
-then: device-set hall-plug/switch-0 toggle
+then: echo toggle > /dev/hall-plug/switch-0
 cooldown: 5s
 `);
-  assertEquals(read.when, [{ kind: 'event', device: 'porch-button', entity: 'input-0', is: 'single' }]);
+  assertEquals(read.when, [{ kind: 'event', device: 'porch-button', endpoint: 'input-0', is: 'single' }]);
   assertEquals(read.if.length, 2);
-  assertEquals([read.then, read.cooldownMs], [['device-set hall-plug/switch-0 toggle'], 5000]);
+  assertEquals([read.then, read.cooldownMs], [['echo toggle > /dev/hall-plug/switch-0'], 5000]);
   assertEquals(rule(`when: [{at: "07:30"}, {every: 15m}]\nthen: [a, b]`).when, [{ kind: 'at', minute: 450 }, { kind: 'every', ms: 900_000 }]);
 
   for (
     const [yaml, problem] of [
       ['then: x', 'needs when'],
-      ['when: {event: porch-button}\nthen: x', '<device>/<entity>'],
+      ['when: {event: porch-button}\nthen: x', '<device>/<endpoint>'],
       ['when: {state: a/b, above: warm}\nthen: x', 'takes a number'],
       ['when: {at: "25:00"}\nthen: x', 'time of day'],
       ['when: {every: 10s}\nthen: x', 'a minute or more'],
@@ -47,14 +47,14 @@ cooldown: 5s
 
 Deno.test('triggers: a state fires when its value comes, not while it stays', () => {
   const above = rule('when: {state: hall/temperature, above: 25}\nthen: x').when[0];
-  const state = (value: number) => ({ kind: 'state' as const, device: 'hall', entity: 'temperature', value });
+  const state = (value: number) => ({ kind: 'state' as const, device: 'hall', endpoint: 'temperature', value });
   assertEquals(fires(above, state(26), 24), true);
   assertEquals(fires(above, state(27), 26), false);
   assertEquals(fires(above, state(26), undefined), true);
   assertEquals(fires(above, state(24), 26), false);
 
   const to = rule('when: {state: hall/door, to: on}\nthen: x').when[0];
-  const door = (value: boolean) => ({ kind: 'state' as const, device: 'hall', entity: 'door', value });
+  const door = (value: boolean) => ({ kind: 'state' as const, device: 'hall', endpoint: 'door', value });
   assertEquals(fires(to, door(true), false), true);
   assertEquals(fires(to, door(true), true), false);
   const from = rule('when: {state: hall/door, from: on}\nthen: x').when[0];
@@ -67,8 +67,8 @@ Deno.test('triggers: a state fires when its value comes, not while it stays', ()
 
 Deno.test('triggers: a press of its kind, a device coming or going', () => {
   const press = rule('when: {event: porch/input-0, is: single}\nthen: x').when[0];
-  assertEquals(fires(press, { kind: 'event', device: 'porch', entity: 'input-0', value: 'single' }, undefined), true);
-  assertEquals(fires(press, { kind: 'event', device: 'porch', entity: 'input-0', value: 'long' }, undefined), false);
+  assertEquals(fires(press, { kind: 'event', device: 'porch', endpoint: 'input-0', value: 'single' }, undefined), true);
+  assertEquals(fires(press, { kind: 'event', device: 'porch', endpoint: 'input-0', value: 'long' }, undefined), false);
   const offline = rule('when: {online: plug, is: false}\nthen: x').when[0];
   assertEquals(fires(offline, { kind: 'online', device: 'plug', online: false }, undefined), true);
   assertEquals(fires(offline, { kind: 'online', device: 'plug', online: true }, undefined), false);
@@ -119,7 +119,7 @@ Deno.test('the engine: conditions, cooldown, and a state held for a while', () =
   const lamp = rule('when: {event: porch/input-0}\nif: {state: hall/lux, below: 30}\nthen: x\ncooldown: 5s', 'lamp');
   const fan = rule('when: {state: hall/temperature, above: 25, for: 10m}\nthen: x', 'fan');
   const { engine, ran, advance } = engineFor([lamp, fan]);
-  const press = { kind: 'event' as const, device: 'porch', entity: 'input-0', value: 'single' };
+  const press = { kind: 'event' as const, device: 'porch', endpoint: 'input-0', value: 'single' };
 
   engine.handle(press);
   assertEquals(ran, [], 'the lux is not known yet');
@@ -131,7 +131,7 @@ Deno.test('the engine: conditions, cooldown, and a state held for a while', () =
   engine.handle(press);
   assertEquals(ran.length, 2);
 
-  const temperature = (value: number) => engine.handle({ kind: 'state', device: 'hall', entity: 'temperature', value });
+  const temperature = (value: number) => engine.handle({ kind: 'state', device: 'hall', endpoint: 'temperature', value });
   temperature(26);
   advance(5 * 60_000);
   temperature(24);

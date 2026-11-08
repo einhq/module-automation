@@ -1,12 +1,13 @@
 /**
- * The rules service: the engine fed from a durable queue bound to every reading, press and
- * online change on the bus, and by a clock, with the rules read again whenever their files change.
+ * The rules service: the engine fed from a durable queue bound to every device's readings, presses
+ * and coming and going (`dev.#`), and by a clock, with the rules read again whenever their files
+ * change.
  * A rule's lines run one after another, through `runas` as the file's owner, until one fails; each
  * run is kept in the rules log. Runs never overlap: one waits for the one before.
  */
 
+import type { DeviceMessage } from '@ein/api';
 import { type Command, type ResourceHandleIf, shq } from '@ein/client';
-import type { OnlineMessage, Reading } from './api.ts';
 import { type Firing, RuleEngine } from './engine.ts';
 import { RULES_DIR, RULES_KEYS, RULES_LOG, RULES_QUEUE } from './paths.ts';
 import { latestValues, localTime, onlineDevices, readRuleFiles, type RuleFile } from './rule-files.ts';
@@ -32,15 +33,18 @@ type ServiceOptions = {
 const parent = (path: string) => path.slice(0, path.lastIndexOf('/')) || '/';
 const leaf = (path: string) => path.slice(path.lastIndexOf('/') + 1);
 
-/** A bus message as a rule sees it, or undefined when it is none of automation's. */
+/**
+ * A device's message as a rule sees it: one without an endpoint is the device coming or going, one
+ * marked `event` a press, any other value a state. A track's fix is none of a rule's.
+ */
 const messageOf = (data: unknown): Message | undefined => {
   if (!data || typeof data !== 'object') return undefined;
-  const record = data as Partial<Reading & OnlineMessage>;
+  const record = data as Partial<DeviceMessage>;
   if (typeof record.device !== 'string') return undefined;
-  if (typeof record.online === 'boolean') return { kind: 'online', device: record.device, online: record.online };
-  if (typeof record.entity !== 'string' || !('value' in record) || record.value === undefined) return undefined;
-  if (record.kind === 'event') return { kind: 'event', device: record.device, entity: record.entity, value: String(record.value) };
-  return { kind: 'state', device: record.device, entity: record.entity, value: record.value };
+  if (record.endpoint === undefined) return typeof record.online === 'boolean' ? { kind: 'online', device: record.device, online: record.online } : undefined;
+  if (typeof record.endpoint !== 'string' || record.value === undefined) return undefined;
+  if (record.event) return { kind: 'event', device: record.device, endpoint: record.endpoint, value: String(record.value) };
+  return { kind: 'state', device: record.device, endpoint: record.endpoint, value: record.value };
 };
 
 export const runRulesService = async ({ cmd, stopped, automationGid }: ServiceOptions): Promise<void> => {

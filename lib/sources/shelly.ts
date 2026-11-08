@@ -15,9 +15,9 @@
  * `switch-0-power`, `input-0`, `temperature-0`.
  */
 
-import type { EntityKind, Value } from '../api.ts';
-import { labelOf, slug } from '../slug.ts';
-import type { MqttSource, Publish, Update } from './types.ts';
+import { deviceName, type DeviceValue } from '@ein/api';
+import { labelOf } from './label.ts';
+import type { EntityKind, MqttSource, Publish, Update } from './types.ts';
 
 /** One field of a component's status that is an entity. */
 type Field = {
@@ -92,7 +92,7 @@ const at = (status: Json, path: string[]): unknown => {
   return value;
 };
 
-const asValue = (raw: unknown): Value | undefined => {
+const asValue = (raw: unknown): DeviceValue | undefined => {
   if (raw === null) return null;
   if (typeof raw === 'number' || typeof raw === 'boolean' || typeof raw === 'string') return raw;
   return undefined;
@@ -124,7 +124,7 @@ export const createShelly = (options: ShellyOptions): MqttSource => {
   const deviceOf = (prefix: string, updates: Update[]): string | undefined => {
     const known = prefixes.get(prefix);
     if (known) return known;
-    const device = slug(prefix);
+    const device = deviceName(prefix);
     if (!device) return undefined;
     prefixes.set(prefix, device);
     devices.set(device, prefix);
@@ -143,7 +143,7 @@ export const createShelly = (options: ShellyOptions): MqttSource => {
     const [, type, index] = match;
     const fields = type === 'input' ? [{ suffix: '', path: ['state'], kind: (status.state === null ? 'button' : 'binary') as EntityKind }] : COMPONENTS[type];
     if (!fields) return [];
-    const name = index === undefined ? slug(type) : `${slug(type)}-${index}`;
+    const name = index === undefined ? deviceName(type) : `${deviceName(type)}-${index}`;
     const updates: Update[] = [];
     for (const field of fields) {
       const raw = at(status, field.path);
@@ -217,7 +217,7 @@ export const createShelly = (options: ShellyOptions): MqttSource => {
         label: typeof result.name === 'string' && result.name ? result.name : asked.prefix,
         manufacturer: 'Shelly',
         model: typeof result.model === 'string' ? result.model : undefined,
-        sw: typeof result.ver === 'string' ? result.ver : undefined,
+        firmware: typeof result.ver === 'string' ? result.ver : undefined,
         mac: typeof result.mac === 'string' ? result.mac.toLowerCase() : undefined,
       }];
     }
@@ -238,8 +238,8 @@ export const createShelly = (options: ShellyOptions): MqttSource => {
 
   return {
     name: 'shelly',
+    description: "Shelly's second generation and later (Plus, Pro, Gen3, Gen4), over MQTT",
     topics: () => ['+/online', '+/status/+', '+/events/rpc', `${src}/rpc`],
-    owns: (device) => devices.has(device),
     forget(device) {
       const prefix = devices.get(device);
       if (prefix) prefixes.delete(prefix);
@@ -281,11 +281,7 @@ export const createShelly = (options: ShellyOptions): MqttSource => {
       const prefix = devices.get(device);
       const match = /^(switch|light)-(\d+)$/.exec(entity);
       if (!prefix || !match) return undefined;
-      const component = SETTABLE[match[1]];
-      const id = Number(match[2]);
-      const call = value === 'toggle'
-        ? { id: nextId++, src, method: `${component}.Toggle`, params: { id } }
-        : { id: nextId++, src, method: `${component}.Set`, params: { id, on: value === 'on' } };
+      const call = { id: nextId++, src, method: `${SETTABLE[match[1]]}.Set`, params: { id: Number(match[2]), on: value === 'on' } };
       return [{ topic: `${prefix}/rpc`, payload: JSON.stringify(call) } satisfies Publish];
     },
   };

@@ -1,12 +1,14 @@
 /**
- * The bridge in a booted EiN against a broker of the test's own: devices become nodes, readings
- * reach their history and anyone's queue, commands reach the device as whoever may give them,
- * and a reconnect replays nothing new.
+ * The bridge in a booted EiN against a broker of the test's own: devices it hears become core's
+ * devices under /dev with endpoints of the right types, their readings are kept there and reach
+ * anyone's queue, a write to a control reaches the device as whoever may give it, a forgotten device
+ * stays forgotten, and a reconnect adds nothing.
  */
 
-import { assertEquals, assertExists } from '@std/assert';
+import { assertEquals, assertExists, assertStringIncludes } from '@std/assert';
+import type { DeviceHistory, DeviceInfo, DriverSummary } from '@ein/api';
 import { createTestContext, type ShellClient } from '@ein/testing';
-import type { AutomationStatus, DeviceHistory, DeviceInfo, DeviceSummary } from '@automation/api';
+import type { AutomationStatus } from '@automation/api';
 import { esphomeConfigs, esphomeStates, shellyButton, shellyPlug } from './fixtures.ts';
 import { startStubBroker } from './stub-broker.ts';
 
@@ -47,38 +49,42 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
     const anna = await signIn('anna');
     const bo = await signIn('bo');
 
-    await t.step('the bridge connects, and the automation group exists', async () => {
+    await t.step('the bridge connects and registers a driver for each source', async () => {
       const status = await until('connected', () => admin.execJson<AutomationStatus>('automation-status'), (status) => status.connected);
-      assertEquals(status.sources, ['ha-discovery', 'shelly']);
-      assertEquals((await admin.exec('group-exists automation')).success, true);
+      assertEquals(status.drivers, ['ha-discovery', 'shelly']);
+      const drivers = await anna.execJson<DriverSummary[]>('devices --drivers');
+      assertEquals(drivers.filter((driver) => driver.module === 'automation').map((driver) => [driver.name, driver.running]), [['ha-discovery', true], [
+        'shelly',
+        true,
+      ]]);
     });
 
-    await t.step('an ESPHome sensor becomes a device with its entities and their values', async () => {
+    await t.step('an ESPHome sensor becomes a device under /dev, its entities endpoints with their readings', async () => {
       for (const message of [...esphomeConfigs, ...esphomeStates]) broker.publish(message.topic, message.payload, { retain: message.retain });
       const info = await until(
         'hall-sensor',
         () => anna.execJson<DeviceInfo>('device-show hall-sensor'),
-        (info) => info.entityList.filter((entity) => entity.last).length === 3,
+        (info) => info.endpointList.filter((endpoint) => endpoint.last).length === 3 && info.online === true,
       );
-      assertEquals([info.label, info.source, info.online, info.mac], ['hall-sensor', 'ha-discovery', true, 'a4cf12000001']);
-      assertEquals(info.entityList.map((entity) => [entity.name, entity.kind, entity.last?.value, entity.settable]), [
-        ['motion', 'binary', false, false],
-        ['relay', 'switch', true, true],
-        ['temperature', 'sensor', 21.4, false],
+      assertEquals([info.path, info.label, info.driver, info.driverRunning, info.class, info.manufacturer, info.mac], [
+        '/dev/hall-sensor',
+        'hall-sensor',
+        'ha-discovery',
+        true,
+        'sensor',
+        'Espressif',
+        'a4cf12000001',
       ]);
-      assertEquals(info.main, { entity: 'temperature', label: 'Temperature', value: 21.4, unit: '°C' });
+      assertEquals(info.endpointList.map((endpoint) => [endpoint.name, endpoint.type, endpoint.schema?.type, endpoint.last?.value, endpoint.writable]), [
+        ['motion', 'log', undefined, false, false],
+        ['relay', 'control', 'bool', true, true],
+        ['temperature', 'log', undefined, 21.4, false],
+      ]);
+      assertEquals(info.main, { endpoint: 'temperature', label: 'Temperature', value: 21.4, unit: '°C' });
     });
 
-    await t.step("the device is the automation group's; its set node the users group's", async () => {
-      const device = (await admin.execJson<{ props: { gid: number } }>('stat /archive/devices/hall-sensor')).props;
-      const set = (await admin.execJson<{ props: { gid: number } }>('stat /archive/devices/hall-sensor/relay/set')).props;
-      const automation = await admin.execJson<{ gid: number }>('group-info automation');
-      const users = await admin.execJson<{ gid: number }>('group-info users');
-      assertEquals([device.gid, set.gid], [automation.gid, users.gid]);
-    });
-
-    await t.step('a reading is kept in the history and reaches a queue someone bound to its key', async () => {
-      await anna.execString("mkqueue -k 'automation.state.hall-sensor.#' /home/anna/hall");
+    await t.step('a reading is kept on its endpoint and reaches a queue someone bound to its key', async () => {
+      await anna.execString("mkqueue -k 'dev.hall-sensor.#' /home/anna/hall");
       broker.publish('hall-sensor/sensor/temperature/state', '22.0', { retain: true });
       const history = await until(
         'history',
@@ -86,19 +92,11 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
         (history) => history.readings.length === 2,
       );
       assertEquals([history.unit, history.readings.map((reading) => reading.value)], ['°C', [21.4, 22]]);
-      const recent = await anna.execJson<DeviceHistory>('device-history hall-sensor/temperature --since 1h');
-      assertEquals(recent.readings.map((reading) => reading.value), [21.4, 22]);
-      const daily = await anna.execJson<DeviceHistory>('device-history hall-sensor/temperature --since 1d --bucket 1d --agg max');
-      assertEquals([daily.bucket, daily.readings.at(-1)?.value, daily.readings.reduce((sum, reading) => sum + (reading.count ?? 0), 0)], [
-        { seconds: 86_400, aggregate: 'max' },
-        22,
-        2,
-      ]);
-      const queued = await until('queue', () => anna.execString('queue-peek /home/anna/hall'), (text) => text.includes('22'));
-      assertEquals(queued.includes('°C'), true);
+      const queued = await until('queue', () => anna.execString('queue-peek /home/anna/hall'), (text) => text.includes('"value":22'));
+      assertStringIncludes(queued, '"endpoint":"temperature"');
     });
 
-    await t.step('a Shelly plug and its power', async () => {
+    await t.step('a Shelly plug: its switch a control, its power a reading', async () => {
       broker.publish(shellyPlug.online.topic, shellyPlug.online.payload, { retain: true });
       broker.publish(shellyPlug.switchStatus.topic, shellyPlug.switchStatus.payload);
       const asked = await until('GetDeviceInfo', async () => broker.published.filter((message) => message.topic === 'hall-plug/rpc'), (asked) => asked.length >= 2);
@@ -106,57 +104,67 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
       const answer = shellyPlug.deviceInfo(request.src, request.id);
       broker.publish(answer.topic, answer.payload);
       const info = await until('hall-plug', () => anna.execJson<DeviceInfo>('device-show hall-plug'), (info) => info.model === 'S3PL-00112EU');
-      assertEquals([info.manufacturer, info.online, info.main?.entity, info.main?.value], ['Shelly', true, 'switch-0-power', 12.3]);
+      assertEquals([info.driver, info.class, info.manufacturer, info.firmware, info.online, info.main?.endpoint, info.main?.value], [
+        'shelly',
+        'plug',
+        'Shelly',
+        '1.4.4',
+        true,
+        'switch-0-power',
+        12.3,
+      ]);
+      const endpoints = new Map(info.endpointList.map((endpoint) => [endpoint.name, endpoint]));
+      assertEquals([endpoints.get('switch-0')?.type, endpoints.get('switch-0')?.last?.value], ['control', true]);
+      assertEquals([endpoints.get('switch-0-temperature')?.type, endpoints.get('switch-0-temperature')?.category], ['log', 'diagnostic']);
       broker.publish(shellyPlug.powerChange.topic, shellyPlug.powerChange.payload);
       await until('power', () => anna.execJson<DeviceHistory>('device-history hall-plug/switch-0-power'), (history) => history.readings.at(-1)?.value === 20.5);
     });
 
     await t.step('a button press is an event on the bus', async () => {
-      await bo.execString("mkqueue -k 'automation.event.#' /home/bo/presses");
+      await bo.execString("mkqueue -k 'dev.#' /home/bo/presses");
       broker.publish(shellyButton.press.topic, shellyButton.press.payload);
       broker.publish(shellyButton.longPress.topic, shellyButton.longPress.payload);
-      const presses = await until('presses', () => bo.execString('queue-peek /home/bo/presses'), (text) => text.includes('long'));
-      assertEquals(presses.includes('single'), true);
+      const presses = await until('presses', () => bo.execString('queue-peek -n 50 /home/bo/presses'), (text) => text.includes('long'));
+      assertStringIncludes(presses, '"value":"single"');
+      assertStringIncludes(presses, '"event":true');
+      const button = await bo.execJson<DeviceInfo>('device-show porch-button');
+      assertEquals([button.class, button.endpointList.map((endpoint) => [endpoint.name, endpoint.type, endpoint.events])], ['button', [['input-0', 'log', true]]]);
     });
 
-    await t.step('device-set sends what the device understands, as anyone in the users group', async () => {
-      await anna.execString('device-set hall-plug/switch-0 off');
-      const call = await until(
-        'Switch.Set',
-        async () => broker.published.filter((message) => message.topic === 'hall-plug/rpc').map((message) => JSON.parse(message.payload)),
-        (calls) => calls.some((call) => call.method === 'Switch.Set'),
-      );
-      assertEquals(call.find((each) => each.method === 'Switch.Set').params, { id: 0, on: false });
-      await bo.execString('device-set hall-sensor/relay toggle');
+    await t.step('writing a control sends the device what it understands, as anyone in the users group', async () => {
+      await anna.execString('echo off > /dev/hall-plug/switch-0');
+      const calls = broker.published.filter((message) => message.topic === 'hall-plug/rpc').map((message) => JSON.parse(message.payload));
+      assertEquals(calls.find((call) => call.method === 'Switch.Set')?.params, { id: 0, on: false });
+      await bo.execString('echo on > /dev/hall-sensor/relay');
+      assertEquals(broker.published.filter((message) => message.topic === 'hall-sensor/switch/relay/command').at(-1)?.payload, 'ON');
+      // A toggle goes against what the relay last reported, which is still on.
+      await bo.execString('echo toggle > /dev/hall-sensor/relay');
+      assertEquals(broker.published.filter((message) => message.topic === 'hall-sensor/switch/relay/command').at(-1)?.payload, 'OFF');
+    });
+
+    await t.step("the device's report of its new state is the control's value", async () => {
+      const off = { ...shellyPlug.powerChange, payload: JSON.stringify({ method: 'NotifyStatus', params: { 'switch:0': { id: 0, output: false } } }) };
+      broker.publish(off.topic, off.payload);
       await until(
-        'relay command',
-        async () => broker.published.filter((message) => message.topic === 'hall-sensor/switch/relay/command'),
-        (sent) => sent.at(-1)?.payload === 'OFF',
+        'switch-0 off',
+        () => anna.execJson<DeviceInfo>('device-show hall-plug'),
+        (info) => info.endpointList.find((endpoint) => endpoint.name === 'switch-0')?.last?.value === false,
       );
     });
 
-    await t.step('a value an entity does not take, and an entity that cannot be set, are refused', async () => {
-      assertEquals((await anna.exec('device-set hall-plug/switch-0 dim')).success, false);
-      assertEquals((await anna.exec('device-set hall-sensor/temperature 20')).success, false);
+    await t.step('a value the control does not take, and a reading, are refused', async () => {
+      assertEquals((await anna.exec('echo dim > /dev/hall-plug/switch-0')).success, false);
+      assertEquals((await anna.exec('echo 20 > /dev/hall-sensor/temperature')).success, false);
     });
 
-    await t.step("who may set an entity is its set node's mode", async () => {
-      await admin.execString('chmod 640 /archive/devices/hall-plug/switch-0/set');
-      assertEquals((await anna.exec('device-set hall-plug/switch-0 on')).success, false);
-      await admin.execString('chmod 660 /archive/devices/hall-plug/switch-0/set');
-      await anna.execString('device-set hall-plug/switch-0 on');
+    await t.step('who may write a control is its mode', async () => {
+      await admin.execString('chmod 644 /dev/hall-plug/switch-0');
+      assertEquals((await anna.exec('echo on > /dev/hall-plug/switch-0')).success, false);
+      await admin.execString('chmod 664 /dev/hall-plug/switch-0');
+      await anna.execString('echo on > /dev/hall-plug/switch-0');
     });
 
-    await t.step('naming a device is for the automation group', async () => {
-      assertEquals((await anna.exec("device-label hall-plug 'Hall lamp'")).success, false);
-      await admin.execString('group-add-member automation anna');
-      const member = await signIn('anna');
-      await member.execString("device-label hall-plug 'Hall lamp'");
-      const devices = await anna.execJson<DeviceSummary[]>('devices');
-      assertEquals(devices.find((device) => device.name === 'hall-plug')?.label, 'Hall lamp');
-    });
-
-    await t.step('a reconnect replays the retained states, and the history keeps nothing new', async () => {
+    await t.step('a reconnect replays the retained states, and no endpoint keeps anything new', async () => {
       const before = (await admin.execJson<DeviceHistory>('device-history hall-sensor/temperature')).readings.length;
       broker.dropClients();
       await until('reconnected', () => admin.execJson<AutomationStatus>('automation-status'), (status) => status.connected && broker.clients() > 0);
@@ -165,19 +173,25 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
       assertEquals((await admin.execJson<DeviceHistory>('device-history hall-sensor/temperature')).readings.length, before);
     });
 
-    await t.step('forgetting a device removes it and stops the broker replaying its announcements', async () => {
-      const member = clients.at(-1)!;
+    await t.step('a member of the devices group forgets a device; the broker stops replaying it, so it stays gone', async () => {
+      assertEquals((await anna.exec('device-forget hall-sensor')).success, false);
+      await admin.execString('group-add-member devices anna');
+      const member = await signIn('anna');
       await member.execString('device-forget hall-sensor');
-      assertEquals((await admin.exec('stat /archive/devices/hall-sensor')).success, false);
+      assertEquals((await admin.exec('stat /dev/hall-sensor')).success, false);
       for (const message of esphomeConfigs) assertEquals(broker.retained.has(message.topic), false, message.topic);
+      broker.dropClients();
+      await until('reconnected', () => admin.execJson<AutomationStatus>('automation-status'), (status) => status.connected && broker.clients() > 0);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      assertEquals((await admin.exec('stat /dev/hall-sensor')).success, false);
     });
 
-    await t.step('the status counts what the bridge heard', async () => {
+    await t.step('the status counts the devices its drivers drive', async () => {
       const status = await admin.execJson<AutomationStatus>('automation-status');
       assertExists(status.since);
-      assertEquals(status.connected, true);
+      assertEquals([status.connected, status.devices, status.endpoints], [true, 2, 7]);
       assertEquals(status.messages > 10, true);
-      assertEquals((await admin.execString('JSON_OUTPUT=0 automation-status --brief')).includes('devices'), true);
+      assertStringIncludes(await admin.execString('JSON_OUTPUT=0 automation-status --brief'), '2 devices, 7 endpoints');
     });
   } finally {
     for (const client of clients) client.close();
