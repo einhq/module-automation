@@ -66,9 +66,9 @@
         "key": "CFG_AUTOMATION_SOURCES",
         "scope": "system",
         "type": "string",
-        "default": "ha-discovery shelly",
+        "default": "ha-discovery shelly shelly-gen1",
         "label": "Device sources",
-        "description": "Which kinds of device the bridge listens for, and drives, separated by spaces: ha-discovery (anything that announces itself the way Home Assistant reads, such as ESPHome) and shelly (Shelly's second generation and later).",
+        "description": "Which kinds of device the bridge listens for, and drives, separated by spaces: ha-discovery (anything that announces itself the way Home Assistant reads, such as ESPHome), shelly (Shelly's second generation and later) and shelly-gen1 (Shelly's first generation: Plug S, 1, 1PM, 2.5, i3).",
         "group": "Automation",
         "restarts": [
           "automation-bridge"

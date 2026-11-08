@@ -5,8 +5,9 @@
 import { assertEquals, assertExists } from '@std/assert';
 import { createHaDiscovery } from '../lib/sources/ha-discovery.ts';
 import { createShelly } from '../lib/sources/shelly.ts';
+import { createShellyGen1 } from '../lib/sources/shelly-gen1.ts';
 import type { Update } from '../lib/sources/types.ts';
-import { esphomeConfigs, esphomeStates, shellyButton, shellyPlug, templatedConfig } from './fixtures.ts';
+import { esphomeConfigs, esphomeStates, shellyButton, shellyGen1Plug, shellyPlug, templatedConfig } from './fixtures.ts';
 
 const of = <K extends Update['kind']>(updates: Update[], kind: K) => updates.filter((update): update is Extract<Update, { kind: K }> => update.kind === kind);
 
@@ -184,5 +185,65 @@ Deno.test('shelly: a plug and a four-button input', async (t) => {
     assertEquals(source.decode('hall-sensor/status', 'online', true), []);
     assertEquals(source.decode('garage/status/door', JSON.stringify({ open: true }), false), []);
     assertEquals(source.decode('garage/online', 'yes', false), []);
+  });
+});
+
+Deno.test('shelly-gen1: a first generation plug', async (t) => {
+  const plug = shellyGen1Plug;
+  const device = 'shellyplug-s-a1b2c3d4e5f6';
+
+  await t.step('its announcement makes it a device, with its model, firmware and MAC', () => {
+    const source = createShellyGen1();
+    const updates = source.decode(plug.announce.topic, plug.announce.payload, false);
+    assertEquals(of(updates, 'device'), [{
+      kind: 'device',
+      device,
+      label: plug.id,
+      manufacturer: 'Shelly',
+      model: 'Plug S',
+      firmware: '20221027-101131/v1.12.1-ga9117d3',
+      mac: 'a1:b2:c3:d4:e5:f6',
+    }]);
+    assertEquals(of(updates, 'publish'), [], 'one that announced is not asked to');
+  });
+
+  await t.step('its relay can be set, its power is in W and its energy in Wh', () => {
+    const source = createShellyGen1();
+    source.decode(plug.announce.topic, plug.announce.payload, false);
+    const relay = source.decode(plug.relay.topic, plug.relay.payload, true);
+    assertEquals(of(relay, 'entity').map((entity) => [entity.entity, entity.entityKind, entity.settable]), [['relay-0', 'switch', true]]);
+    assertEquals(of(relay, 'state'), [{ kind: 'state', device, entity: 'relay-0', value: true, retained: true }]);
+    assertEquals(of(source.decode(plug.power.topic, plug.power.payload, false), 'state')[0].value, 8.46);
+    const energy = source.decode(plug.energy.topic, plug.energy.payload, false);
+    assertEquals([of(energy, 'entity')[0].unit, of(energy, 'state')[0].value], ['Wh', 2]);
+    const temperature = source.decode(plug.temperature.topic, plug.temperature.payload, false);
+    assertEquals([of(temperature, 'entity')[0].category, of(temperature, 'state')[0].value], ['diagnostic', 27.9]);
+    assertEquals(source.decode(plug.relay.topic, plug.relay.payload, false).filter((update) => update.kind !== 'state'), [], 'an entity is announced once');
+  });
+
+  await t.step('a device heard before it announced is asked to, once', () => {
+    const source = createShellyGen1();
+    const updates = source.decode(plug.online.topic, plug.online.payload, true);
+    assertEquals([of(updates, 'device')[0].device, of(updates, 'online')[0].online], [device, true]);
+    assertEquals(of(updates, 'publish').map((update) => update.publish), [{ topic: `shellies/${plug.id}/command`, payload: 'announce' }]);
+    assertEquals(of(source.decode(plug.power.topic, plug.power.payload, false), 'publish'), []);
+  });
+
+  await t.step('on and off go to its command topic; nothing else does', () => {
+    const source = createShellyGen1();
+    source.decode(plug.announce.topic, plug.announce.payload, false);
+    assertEquals(source.encode({ device, entity: 'relay-0', value: 'off' }), [plug.command]);
+    assertEquals(source.encode({ device, entity: 'relay-0-power', value: '1' }), undefined);
+    assertEquals(source.encode({ device: 'someone-else', entity: 'relay-0', value: 'on' }), undefined);
+    assertEquals(source.decode(plug.command.topic, plug.command.payload, false), [], 'its own command is not a reading');
+  });
+
+  await t.step('a press is an event, and a retained one is not news', () => {
+    const source = createShellyGen1();
+    source.decode(plug.announce.topic, plug.announce.payload, false);
+    const topic = `shellies/${plug.id}/input_event/0`;
+    const pressed = source.decode(topic, JSON.stringify({ event: 'SS', event_cnt: 3 }), false);
+    assertEquals([of(pressed, 'entity')[0].entityKind, of(pressed, 'event')[0].value], ['button', 'double']);
+    assertEquals(of(source.decode(topic, JSON.stringify({ event: 'S', event_cnt: 4 }), true), 'event'), []);
   });
 });

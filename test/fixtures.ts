@@ -135,3 +135,28 @@ export const shellyButton = {
     }),
   },
 };
+
+/**
+ * A first generation Plug S as it says itself on connecting and after, recorded from one and given
+ * an invented id, MAC and address.
+ */
+export const shellyGen1Plug = {
+  id: 'shellyplug-s-a1b2c3d4e5f6',
+  announce: {
+    topic: 'shellies/announce',
+    payload: JSON.stringify({
+      id: 'shellyplug-s-a1b2c3d4e5f6',
+      model: 'SHPLG-S',
+      mac: 'A1B2C3D4E5F6',
+      ip: '192.0.2.10',
+      new_fw: false,
+      fw_ver: '20221027-101131/v1.12.1-ga9117d3',
+    }),
+  },
+  online: { topic: 'shellies/shellyplug-s-a1b2c3d4e5f6/online', payload: 'true' },
+  relay: { topic: 'shellies/shellyplug-s-a1b2c3d4e5f6/relay/0', payload: 'on' },
+  power: { topic: 'shellies/shellyplug-s-a1b2c3d4e5f6/relay/0/power', payload: '8.46' },
+  energy: { topic: 'shellies/shellyplug-s-a1b2c3d4e5f6/relay/0/energy', payload: '120' },
+  temperature: { topic: 'shellies/shellyplug-s-a1b2c3d4e5f6/temperature', payload: '27.90' },
+  command: { topic: 'shellies/shellyplug-s-a1b2c3d4e5f6/relay/0/command', payload: 'off' },
+};

@@ -5,12 +5,13 @@
 
 import { createHaDiscovery } from './ha-discovery.ts';
 import { createShelly } from './shelly.ts';
+import { createShellyGen1 } from './shelly-gen1.ts';
 import type { MqttSource } from './types.ts';
 
 export type { Command, DeviceChange, DeviceUpdate, EntityUpdate, MqttSource, Publish, Update } from './types.ts';
 
 /** Every source there is, which are the names of automation's drivers. */
-export const SOURCE_NAMES: readonly string[] = ['ha-discovery', 'shelly'];
+export const SOURCE_NAMES: readonly string[] = ['ha-discovery', 'shelly', 'shelly-gen1'];
 
 type SourceOptions = {
   /** Home Assistant's discovery prefix. */
@@ -29,6 +30,7 @@ export const createSources = (names: string[], options: SourceOptions): { source
   for (const name of names) {
     if (name === 'ha-discovery') sources.push(createHaDiscovery({ prefix: options.discoveryPrefix }));
     else if (name === 'shelly') sources.push(createShelly({ src: options.clientId }));
+    else if (name === 'shelly-gen1') sources.push(createShellyGen1());
     else unknown.push(name);
   }
   return { sources, unknown };

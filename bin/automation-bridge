@@ -15,7 +15,7 @@ import { connectMqtt } from '@automation/mqtt';
 import { createSources } from '@automation/sources';
 import { bridgeState } from '@automation/state';
 
-const DEFAULT_SOURCES = 'ha-discovery shelly';
+const DEFAULT_SOURCES = 'ha-discovery shelly shelly-gen1';
 const DEFAULT_MIN_INTERVAL_SECONDS = 10;
 
 const automationBridge = async (cmd: Command): CmdReturn => {
