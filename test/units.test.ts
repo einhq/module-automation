@@ -1,10 +1,12 @@
 /**
- * The small rules: which templates are read, how names are made, when a reading is published.
+ * The small rules: which templates are read, how names are made, when a reading is published, how an
+ * average is rounded.
  */
 
 import { assertEquals } from '@std/assert';
 import { parseTarget } from '../lib/paths.ts';
 import { labelOf, slug } from '../lib/slug.ts';
+import { bucketValue } from '../lib/store.ts';
 import { compileTemplate } from '../lib/sources/template.ts';
 import { decide } from '../lib/throttle.ts';
 import { parseDuration, parseMoment } from '../lib/time.ts';
@@ -68,4 +70,12 @@ Deno.test('times: a duration, and a moment as a time or as that long ago', () =>
   assertEquals(parseMoment('24h', now)?.toISOString(), '2026-01-04T00:00:00.000Z');
   assertEquals(parseMoment('2026-01-01T12:00:00Z', now)?.toISOString(), '2026-01-01T12:00:00.000Z');
   assertEquals(parseMoment('yesterday', now), undefined);
+});
+
+Deno.test('an average is given to five significant digits, every other aggregate as it is', () => {
+  assertEquals(bucketValue(20.666666666666668, 'avg'), 20.667);
+  assertEquals(bucketValue(0.000123456, 'avg'), 0.00012346);
+  assertEquals(bucketValue(230.4, 'avg'), 230.4);
+  assertEquals(bucketValue(20.666666666666668, 'max'), 20.666666666666668);
+  assertEquals(bucketValue(true, 'avg'), true);
 });

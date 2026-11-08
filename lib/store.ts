@@ -61,8 +61,11 @@ export const readingsPer = async (
     field: ['value'],
     timeZone: SYSTEM_TIME_ZONE,
   });
-  return buckets.map((bucket) => ({ at: new Date(bucket.at).toISOString(), value: bucket.value, count: bucket.count }));
+  return buckets.map((bucket) => ({ at: new Date(bucket.at).toISOString(), value: bucketValue(bucket.value, query.aggregate), count: bucket.count }));
 };
+
+/** A bucket's value as device-history gives it: an average to five significant digits, more than any sensor measures. */
+export const bucketValue = (value: Value, aggregate: HistoryAggregate): Value => aggregate === 'avg' && typeof value === 'number' ? Number(value.toPrecision(5)) : value;
 
 const lastOf = async (cmd: Command, device: string, entity: string): Promise<{ value: Value; at: string } | undefined> => (await readingsOf(cmd, device, entity, 1))[0];
 
