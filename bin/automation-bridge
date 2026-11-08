@@ -1,0 +1,90 @@
+#!ts
+/**
+ * automation-bridge — the automation-bridge service: hears devices on the MQTT broker, keeps them
+ * as devices under /archive/devices and publishes their readings, and sends what device-set asks.
+ *
+ * Off while CFG_AUTOMATION_MQTT_URL is empty: it says so and ends. Otherwise it runs until stopped,
+ * connecting again whenever the broker goes away.
+ */
+
+import { type CmdReturn, type Command, serviceKey } from '@ein/client';
+import { runBridge } from '@automation/bridge';
+import { Sink } from '@automation/model';
+import { connectMqtt } from '@automation/mqtt';
+import { AUTOMATION_GROUP, DEVICES_ROOT } from '@automation/paths';
+import { createSources } from '@automation/sources';
+import { bridgeState } from '@automation/state';
+
+const DEFAULT_SOURCES = 'ha-discovery shelly';
+const DEFAULT_MIN_INTERVAL_SECONDS = 10;
+
+/** A group's id, or undefined when there is no such group. */
+const gidOf = async (cmd: Command, group: string): Promise<number | undefined> => {
+  const { code, stdout } = await cmd.execute(`JSON_OUTPUT=1 group-info ${group}`).catch(() => ({ code: 1, stdout: '' }));
+  if (code !== 0) return undefined;
+  try {
+    const gid = (JSON.parse(stdout) as { gid?: unknown }).gid;
+    return typeof gid === 'number' ? gid : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const automationBridge = async (cmd: Command): CmdReturn => {
+  const url = (cmd.env.CFG_AUTOMATION_MQTT_URL ?? '').trim();
+  if (!url) {
+    await cmd.writeLn('automation-bridge: off, CFG_AUTOMATION_MQTT_URL is empty: no device is heard');
+    return 0;
+  }
+  if (bridgeState()) {
+    await cmd.writeError('automation-bridge: already running\n');
+    return 1;
+  }
+  const stopped = new Promise<void>((resolve) => cmd.onInterrupt(resolve));
+
+  const automationGid = await gidOf(cmd, AUTOMATION_GROUP);
+  const usersGid = await gidOf(cmd, 'users');
+  // Devices are the automation group's to change. A root another module made comes with the
+  // archive's default, the users group's: it becomes theirs while no one chose otherwise.
+  const root = await cmd.sys.vfs.get(cmd.access, DEVICES_ROOT).catch(() => undefined);
+  if (!root) {
+    const parent = DEVICES_ROOT.slice(0, DEVICES_ROOT.lastIndexOf('/'));
+    await cmd.sys.vfs.ensure(cmd.access, 'directory', parent, DEVICES_ROOT.slice(parent.length + 1), {
+      props: { mode: 0o775, ...(automationGid === undefined ? {} : { gid: automationGid }) },
+    });
+  } else if (automationGid !== undefined && root.props.gid === usersGid) {
+    await cmd.sys.vfs.update(cmd.access, DEVICES_ROOT, { props: { gid: automationGid } });
+  }
+
+  const clientId = `ein-automation-${crypto.randomUUID().slice(0, 8)}`;
+  const names = (cmd.env.CFG_AUTOMATION_SOURCES || DEFAULT_SOURCES).split(/[\s,]+/).filter(Boolean);
+  const { sources, unknown } = createSources(names, {
+    discoveryPrefix: cmd.env.CFG_AUTOMATION_DISCOVERY_PREFIX || 'homeassistant',
+    clientId,
+  });
+  if (unknown.length) await cmd.writeError(`automation-bridge: no source called ${unknown.join(', ')}\n`);
+  const seconds = Number(cmd.env.CFG_AUTOMATION_MIN_INTERVAL);
+  const sink = new Sink({
+    cmd,
+    retention: cmd.env.CFG_AUTOMATION_HISTORY || '365 day',
+    minIntervalMs: (Number.isFinite(seconds) && seconds >= 0 ? seconds : DEFAULT_MIN_INTERVAL_SECONDS) * 1000,
+    automationGid,
+    usersGid,
+  });
+  const password = await serviceKey(cmd, 'CFG_AUTOMATION_MQTT_KEY', 'CFG_AUTOMATION_MQTT_URL');
+  const connect = connectMqtt({ url, clientId, username: cmd.env.CFG_AUTOMATION_MQTT_USER, password });
+  await runBridge({ cmd, url, connect, sources, sink, stopped });
+  return 0;
+};
+
+automationBridge.spec = {
+  name: 'automation-bridge',
+  admin: true,
+  daemon: true,
+  effect: 'write' as const,
+  json: false,
+  description: 'Hear devices on the MQTT broker, keep them under /archive/devices, publish their readings and send what device-set asks (the automation-bridge service)',
+  examples: ['service restart automation-bridge'],
+};
+
+export default automationBridge;

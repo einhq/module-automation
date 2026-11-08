@@ -1,0 +1,77 @@
+#!ts
+/**
+ * automation-status — whether the bridge hears the broker, and what it found.
+ *
+ *   automation-status            everything, as JSON in JSON mode
+ *   automation-status --brief    one line, for the services list
+ *   automation-status --checks   the checks `health` reads
+ */
+
+import type { CmdReturn, Command, HealthCheck } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { AutomationStatus } from '@automation/api';
+import { bridgeState } from '@automation/state';
+
+const statusOf = (cmd: Command): AutomationStatus => {
+  const url = (cmd.env.CFG_AUTOMATION_MQTT_URL ?? '').trim();
+  const state = bridgeState();
+  return {
+    configured: url !== '',
+    ...(url ? { url } : {}),
+    running: state !== undefined,
+    connected: state?.connected ?? false,
+    ...(state ? { since: new Date(state.since).toISOString() } : {}),
+    sources: state?.sources ?? [],
+    devices: state?.devices() ?? 0,
+    entities: state?.entities() ?? 0,
+    messages: state?.messages ?? 0,
+    unsupported: state?.notes() ?? [],
+    ...(state?.lastError ? { lastError: state.lastError } : {}),
+  };
+};
+
+const brief = (status: AutomationStatus): string => {
+  if (!status.configured) return 'off: no broker set';
+  if (!status.running) return 'not running';
+  if (!status.connected) return `cannot reach ${status.url}${status.lastError ? `: ${status.lastError}` : ''}`;
+  return `${status.devices} devices, ${status.entities} entities, ${status.messages} messages`;
+};
+
+const checks = (status: AutomationStatus): HealthCheck[] => {
+  if (!status.configured) return [];
+  if (!status.running) return [{ name: 'automation bridge', state: 'fail', reason: 'the automation-bridge service is not running' }];
+  if (!status.connected) {
+    return [{ name: 'automation bridge', state: 'warn', reason: `cannot reach the broker at ${status.url}${status.lastError ? `: ${status.lastError}` : ''}` }];
+  }
+  return [{ name: 'automation bridge', state: 'ok', reason: brief(status) }];
+};
+
+const automationStatus = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['brief', 'checks'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const status = statusOf(cmd);
+  if (flags.checks) {
+    await cmd.writeJSON(checks(status) satisfies HealthCheck[]);
+  } else if (flags.brief || !cmd.json) {
+    await cmd.writeLn(brief(status));
+    if (!flags.brief) { for (const note of status.unsupported) await cmd.writeLn(`  not read: ${note}`); }
+  } else {
+    await cmd.writeJSON(status satisfies AutomationStatus);
+  }
+  return 0;
+};
+
+automationStatus.spec = {
+  name: 'automation-status',
+  effect: 'read' as const,
+  description: 'Whether the automation bridge hears the MQTT broker, how many devices and entities it found, and which it cannot read',
+  flags: [
+    { name: 'brief', type: 'bool' as const, description: 'one line, as the services list shows it' },
+    { name: 'checks', type: 'bool' as const, description: 'the checks health reads, as JSON' },
+  ],
+  examples: ['automation-status', 'automation-status --brief'],
+  returns: 'AutomationStatus: configured, url, running, connected, since, sources, devices, entities, messages, unsupported, lastError',
+};
+
+export default automationStatus;

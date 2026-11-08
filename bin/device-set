@@ -1,0 +1,79 @@
+#!ts
+/**
+ * device-set — switch a device's entity, or set it to a value: `on`, `off` or `toggle` for a
+ * switch or a light, a number, one of a choice's options, `press` for an action. What may be set
+ * is said by the entity's `set` node: whoever may write it may set the entity.
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { DeviceSetResult, EntitySummary, SetAttrs } from '@automation/api';
+import { entityPath, parseTarget, SET_NAME } from '@automation/paths';
+import { bridgeState } from '@automation/state';
+import { entityOf, fail } from '@automation/store';
+
+const ON = ['on', 'true', '1', 'yes'];
+const OFF = ['off', 'false', '0', 'no'];
+
+/** The value as the bridge takes it, or why the entity does not take it. */
+const normalize = (entity: EntitySummary, raw: string): string | { problem: string } => {
+  const word = raw.trim().toLowerCase();
+  if (entity.kind === 'switch' || entity.kind === 'light') {
+    if (word === 'toggle') return 'toggle';
+    if (ON.includes(word)) return 'on';
+    if (OFF.includes(word)) return 'off';
+    return { problem: `${entity.label} takes on, off or toggle, not ${raw}` };
+  }
+  if (entity.kind === 'number') {
+    const number = Number(raw);
+    if (raw.trim() === '' || !Number.isFinite(number)) return { problem: `${entity.label} takes a number, not ${raw}` };
+    if (entity.min !== undefined && number < entity.min) return { problem: `${entity.label} takes ${entity.min} at least` };
+    if (entity.max !== undefined && number > entity.max) return { problem: `${entity.label} takes ${entity.max} at most` };
+    return String(number);
+  }
+  if (entity.kind === 'text') {
+    if (entity.options && !entity.options.includes(raw)) return { problem: `${entity.label} takes one of ${entity.options.join(', ')}` };
+    return raw;
+  }
+  if (entity.kind === 'action') return 'press';
+  return { problem: `${entity.label} cannot be set: it is a ${entity.kind}` };
+};
+
+const deviceSet = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const target = parseTarget(String(flags._[0] ?? ''));
+  const raw = flags._[1] === undefined ? undefined : String(flags._[1]);
+  if (!target?.entity || raw === undefined) return await fail(cmd, 'device-set', 'usage: device-set <device>/<entity> <value>');
+  try {
+    const entity = await entityOf(cmd, target.device, target.entity);
+    if (!entity.settable) throw new Error(`${target.device}/${target.entity} cannot be set`);
+    const value = normalize(entity, entity.kind === 'action' ? 'press' : raw);
+    if (typeof value !== 'string') throw new Error(value.problem);
+    if (!bridgeState()?.connected) throw new Error('the automation bridge is not connected to the broker, so nothing would be sent');
+    const attrs: SetAttrs = { value, id: crypto.randomUUID(), at: new Date().toISOString() };
+    await cmd.sys.vfs.update<SetAttrs>(cmd.access, `${entityPath(target.device, target.entity)}/${SET_NAME}`, { attrs });
+    const result: DeviceSetResult = { device: target.device, entity: target.entity, value };
+    if (cmd.json) await cmd.writeJSON(result satisfies DeviceSetResult);
+    else await cmd.writeLn(`${target.device}/${target.entity}: ${value}`);
+    return 0;
+  } catch (error) {
+    return await fail(cmd, 'device-set', error);
+  }
+};
+
+deviceSet.spec = {
+  name: 'device-set',
+  effect: 'write' as const,
+  description:
+    'Switch a device on or off, or set one of its entities to a value: on, off or toggle for a switch or a light, a number, one of the options of a choice, press for an action',
+  args: [
+    { name: 'entity', type: 'string' as const, description: 'the entity, as <device>/<entity>' },
+    { name: 'value', type: 'string' as const, description: 'on, off, toggle, a number, an option or press' },
+  ],
+  examples: ['device-set hall-plug/switch-0 toggle', 'device-set heater/target 21'],
+  returns: 'DeviceSetResult: device, entity, value',
+};
+
+export default deviceSet;

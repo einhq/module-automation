@@ -1,0 +1,7 @@
+{
+  "description": "Hears devices on the MQTT broker, keeps their readings and sends what device-set asks",
+  "restartPolicy": "on-failure",
+  "workClass": "background",
+  "statusCommand": "automation-status --brief",
+  "checkCommand": "automation-status --checks"
+}

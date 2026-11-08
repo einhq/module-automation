@@ -1,0 +1,137 @@
+/**
+ * Messages as real devices send them, with invented names and addresses: an ESPHome sensor in the
+ * hall announcing itself with Home Assistant's abbreviated keys, a Shelly plug and a Shelly
+ * four-button input by the porch.
+ */
+
+export type Message = { topic: string; payload: string; retain?: boolean };
+
+const esphomeDevice = {
+  ids: 'a4cf12000001',
+  name: 'hall-sensor',
+  sw: '2025.10.0 (ESPHome)',
+  mdl: 'esp32dev',
+  mf: 'Espressif',
+  cns: [['mac', 'a4cf12000001']],
+};
+
+/** The hall sensor's announcements, retained as ESPHome sends them. */
+export const esphomeConfigs: Message[] = [
+  {
+    topic: 'homeassistant/sensor/hall-sensor/temperature/config',
+    retain: true,
+    payload: JSON.stringify({
+      dev_cla: 'temperature',
+      unit_of_meas: '°C',
+      stat_cla: 'measurement',
+      name: 'Temperature',
+      stat_t: 'hall-sensor/sensor/temperature/state',
+      avty_t: 'hall-sensor/status',
+      uniq_id: 'ESPsensortemperature',
+      dev: esphomeDevice,
+    }),
+  },
+  {
+    topic: 'homeassistant/binary_sensor/hall-sensor/motion/config',
+    retain: true,
+    payload: JSON.stringify({
+      dev_cla: 'motion',
+      name: 'Motion',
+      stat_t: 'hall-sensor/binary_sensor/motion/state',
+      avty_t: 'hall-sensor/status',
+      uniq_id: 'ESPbinary_sensormotion',
+      dev: esphomeDevice,
+    }),
+  },
+  {
+    topic: 'homeassistant/switch/hall-sensor/relay/config',
+    retain: true,
+    payload: JSON.stringify({
+      name: 'Relay',
+      stat_t: 'hall-sensor/switch/relay/state',
+      cmd_t: 'hall-sensor/switch/relay/command',
+      avty_t: 'hall-sensor/status',
+      uniq_id: 'ESPswitchrelay',
+      dev: esphomeDevice,
+    }),
+  },
+];
+
+export const esphomeStates: Message[] = [
+  { topic: 'hall-sensor/status', payload: 'online', retain: true },
+  { topic: 'hall-sensor/sensor/temperature/state', payload: '21.4', retain: true },
+  { topic: 'hall-sensor/binary_sensor/motion/state', payload: 'OFF', retain: true },
+  { topic: 'hall-sensor/switch/relay/state', payload: 'ON', retain: true },
+];
+
+/** A bedroom sensor announced the way Zigbee2MQTT does: one JSON state read with templates. */
+export const templatedConfig: Message = {
+  topic: 'homeassistant/sensor/0x00158d0000000001/humidity/config',
+  retain: true,
+  payload: JSON.stringify({
+    name: 'Humidity',
+    unit_of_measurement: '%',
+    device_class: 'humidity',
+    state_topic: 'zigbee2mqtt/bedroom',
+    value_template: '{{ value_json.humidity | round(1) }}',
+    unique_id: '0x00158d0000000001_humidity',
+    device: { identifiers: ['zigbee2mqtt_0x00158d0000000001'], name: 'bedroom', model: 'Temperature and humidity sensor' },
+  }),
+};
+
+export const shellyPlug = {
+  online: { topic: 'hall-plug/online', payload: 'true', retain: true },
+  switchStatus: {
+    topic: 'hall-plug/status/switch:0',
+    payload: JSON.stringify({
+      id: 0,
+      source: 'init',
+      output: true,
+      apower: 12.3,
+      voltage: 231.2,
+      current: 0.06,
+      aenergy: { total: 1520.5, by_minute: [0, 0, 0], minute_ts: 1700000000 },
+      temperature: { tC: 31.2, tF: 88.2 },
+    }),
+  },
+  sysStatus: { topic: 'hall-plug/status/sys', payload: JSON.stringify({ mac: 'A8032AB12345', uptime: 3600 }) },
+  powerChange: {
+    topic: 'hall-plug/events/rpc',
+    payload: JSON.stringify({
+      src: 'shellyplugsg3-a8032ab12345',
+      dst: 'hall-plug/events',
+      method: 'NotifyStatus',
+      params: { ts: 1700000001, 'switch:0': { id: 0, apower: 20.5 } },
+    }),
+  },
+  deviceInfo: (src: string, id: number) => ({
+    topic: `${src}/rpc`,
+    payload: JSON.stringify({
+      id,
+      src: 'shellyplugsg3-a8032ab12345',
+      dst: src,
+      result: { name: 'Hall plug', id: 'shellyplugsg3-a8032ab12345', mac: 'A8032AB12345', model: 'S3PL-00112EU', gen: 3, ver: '1.4.4', app: 'PlugSG3' },
+    }),
+  }),
+};
+
+export const shellyButton = {
+  press: {
+    topic: 'porch-button/events/rpc',
+    payload: JSON.stringify({
+      src: 'shellyplusi4-c8f09e000001',
+      dst: 'porch-button/events',
+      method: 'NotifyEvent',
+      params: { ts: 1700000002.5, events: [{ component: 'input:0', id: 0, event: 'single_push', ts: 1700000002.5 }] },
+    }),
+  },
+  longPress: {
+    topic: 'porch-button/events/rpc',
+    payload: JSON.stringify({
+      src: 'shellyplusi4-c8f09e000001',
+      dst: 'porch-button/events',
+      method: 'NotifyEvent',
+      params: { ts: 1700000003.5, events: [{ component: 'input:0', id: 0, event: 'long_push', ts: 1700000003.5 }] },
+    }),
+  },
+};

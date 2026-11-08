@@ -1,0 +1,41 @@
+#!ts
+/**
+ * devices — the devices the automation bridge found, each with its main reading.
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { DeviceSummary } from '@automation/api';
+import { fail, listDevices, valueText } from '@automation/store';
+
+const devices = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['online'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  try {
+    const devices = (await listDevices(cmd)).filter((device) => !flags.online || device.online === true);
+    if (cmd.json) {
+      await cmd.writeJSON(devices satisfies DeviceSummary[]);
+      return 0;
+    }
+    for (const device of devices) {
+      const state = device.online === false ? ' (offline)' : '';
+      const main = device.main ? `  ${device.main.label}: ${valueText(device.main.value)}${device.main.unit ? ` ${device.main.unit}` : ''}` : '';
+      await cmd.writeLn(`${device.name}  ${device.label}${state}${main}`);
+    }
+    return 0;
+  } catch (error) {
+    return await fail(cmd, 'devices', error);
+  }
+};
+
+devices.spec = {
+  name: 'devices',
+  effect: 'read' as const,
+  description: 'List the devices the automation bridge found (sensors, plugs, buttons), each with whether it is online and its main reading',
+  flags: [{ name: 'online', type: 'bool' as const, description: 'only the devices that are online' }],
+  examples: ['devices', 'devices --online'],
+  returns: 'DeviceSummary[]: name, path, label, source, manufacturer, model, online, entities, lastAt, main {entity, label, value, unit}',
+};
+
+export default devices;

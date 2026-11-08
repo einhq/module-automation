@@ -1,0 +1,59 @@
+/**
+ * The small rules: which templates are read, how names are made, when a reading is published.
+ */
+
+import { assertEquals } from '@std/assert';
+import { parseTarget } from '../lib/paths.ts';
+import { labelOf, slug } from '../lib/slug.ts';
+import { compileTemplate } from '../lib/sources/template.ts';
+import { decide } from '../lib/throttle.ts';
+
+const run = (template: string, payload: string): unknown => {
+  const compiled = compileTemplate(template);
+  if (typeof compiled !== 'function') throw new Error(compiled.problem);
+  return compiled(payload);
+};
+
+Deno.test('templates: the subset that is read', () => {
+  assertEquals(run('{{ value }}', '21.4'), '21.4');
+  assertEquals(run('{{ value | float }}', '21.4'), 21.4);
+  assertEquals(run('{{ value_json.temperature }}', '{"temperature": 19.5}'), 19.5);
+  assertEquals(run("{{ value_json['air quality'].pm25 | int }}", '{"air quality": {"pm25": 12.8}}'), 12);
+  assertEquals(run('{{ value_json.sensors[1] | round(1) }}', '{"sensors": [1, 2.46]}'), 2.5);
+  assertEquals(run('{{ value_json.state | lower }}', '{"state": "ON"}'), 'on');
+  assertEquals(run('{{ value_json.missing.deeper }}', '{"other": 1}'), undefined);
+  assertEquals(run('{{ value_json.a }}', 'not json'), undefined);
+});
+
+Deno.test('templates: anything else is refused with a reason', () => {
+  for (const template of ['{{ value_json.a * 2 }}', '{% if value %}on{% endif %}', '{{ states("sensor.x") }}', '{{ value | timestamp_local }}']) {
+    const compiled = compileTemplate(template);
+    assertEquals(typeof compiled === 'object' && compiled.problem.includes('not understood'), true, template);
+  }
+});
+
+Deno.test('names: slugs are safe as a node name and a key segment', () => {
+  assertEquals(slug('Hall sensor'), 'hall-sensor');
+  assertEquals(slug('shellyplus1pm-A8032AB12345'), 'shellyplus1pm-a8032ab12345');
+  assertEquals(slug('Kök.lampa/2'), 'kok-lampa-2');
+  assertEquals(slug('--'), '');
+  assertEquals(labelOf('switch-0-power'), 'Switch 0 power');
+});
+
+Deno.test('names: a target is a device, or a device and an entity, by name or path', () => {
+  assertEquals(parseTarget('hall-plug'), { device: 'hall-plug' });
+  assertEquals(parseTarget('hall-plug/switch-0'), { device: 'hall-plug', entity: 'switch-0' });
+  assertEquals(parseTarget('/archive/devices/hall-plug/switch-0'), { device: 'hall-plug', entity: 'switch-0' });
+  assertEquals(parseTarget('a/b/c'), undefined);
+  assertEquals(parseTarget('../etc'), undefined);
+  assertEquals(parseTarget(''), undefined);
+});
+
+Deno.test('throttle: when a reading is published', () => {
+  assertEquals(decide(undefined, 21, 0, 10_000), { publish: 'now' });
+  assertEquals(decide({ value: 21, at: 0 }, 21, 60_000, 10_000), { publish: 'no' });
+  assertEquals(decide({ value: 21, at: 0 }, 22, 4_000, 10_000), { publish: 'later', at: 10_000 });
+  assertEquals(decide({ value: 21, at: 0 }, 22, 10_000, 10_000), { publish: 'now' });
+  assertEquals(decide({ value: true, at: 0 }, false, 1, 10_000), { publish: 'now' });
+  assertEquals(decide({ value: 'single', at: 0 }, 'double', 1, 10_000), { publish: 'now' });
+});

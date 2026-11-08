@@ -1,0 +1,48 @@
+#!ts
+/**
+ * device-history — an entity's latest readings, oldest first. As text, one `<time>\t<JSON>` line
+ * each, the form `cat -t` prints a log in and the chart card reads.
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { DeviceHistory } from '@automation/api';
+import { parseTarget } from '@automation/paths';
+import { entityOf, fail, readingsOf } from '@automation/store';
+
+const DEFAULT_COUNT = 100;
+
+const deviceHistory = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['n'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const target = parseTarget(String(flags._[0] ?? ''));
+  if (!target?.entity) return await fail(cmd, 'device-history', 'usage: device-history <device>/<entity> [-n count]');
+  const count = flags.n === undefined ? DEFAULT_COUNT : Number(flags.n);
+  if (!Number.isInteger(count) || count < 1) return await fail(cmd, 'device-history', `-n takes a whole number above 0, not ${flags.n}`);
+  try {
+    const entity = await entityOf(cmd, target.device, target.entity);
+    const readings = await readingsOf(cmd, target.device, target.entity, count);
+    if (cmd.json) {
+      const history: DeviceHistory = { device: target.device, entity: target.entity, ...(entity.unit ? { unit: entity.unit } : {}), readings };
+      await cmd.writeJSON(history satisfies DeviceHistory);
+      return 0;
+    }
+    for (const reading of readings) await cmd.writeLn(`${reading.at}\t${JSON.stringify({ value: reading.value })}`);
+    return 0;
+  } catch (error) {
+    return await fail(cmd, 'device-history', error);
+  }
+};
+
+deviceHistory.spec = {
+  name: 'device-history',
+  effect: 'read' as const,
+  description: "Show an entity's latest readings, oldest first: a temperature over the last hours, a plug's power, a button's presses",
+  args: [{ name: 'entity', type: 'string' as const, description: 'the entity, as <device>/<entity>' }],
+  flags: [{ name: 'n', type: 'string' as const, description: `how many readings, the latest (${DEFAULT_COUNT} when not given)` }],
+  examples: ['device-history hall-sensor/temperature -n 50'],
+  returns: 'DeviceHistory: device, entity, unit, readings [{at, value}]',
+};
+
+export default deviceHistory;
