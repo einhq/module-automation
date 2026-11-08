@@ -157,17 +157,17 @@ export class DeviceWriter {
       this.refused.add(update.device);
       return;
     }
-    // The label is the device's own only until someone names it: a source's later word does not
-    // replace it.
+    // Core keeps the label a device was made with, or a person gave it, over a source's later word.
     const attrs: DeviceAttrs = defined({
-      label: was?.label ?? update.label,
+      label: update.label,
       driver,
       manufacturer: update.manufacturer,
       model: update.model,
       firmware: update.firmware,
       mac: update.mac,
     });
-    if (!was || changes(was, attrs)) await this.options.devices.ensureDevice(this.access, update.device, attrs);
+    const { label: _label, ...kept } = attrs;
+    if (!was || changes(was, kept)) await this.options.devices.ensureDevice(this.access, update.device, attrs);
     this.devices.set(update.device, driver);
   }
 
@@ -176,10 +176,10 @@ export class DeviceWriter {
     const path = `${devicePath(update.device)}/${update.entity}`;
     const was = await this.attrsOf<EndpointAttrs>(path);
     const { type, schema, events } = endpointOf(update);
-    // A person's name for it stays; what was given only when it was made (its history, how often a
-    // number is kept) can be changed on it since.
-    const attrs: EndpointAttrs & { retention?: string } = defined({
-      label: was ? undefined : update.label,
+    // What was given only when it was made (its history, how often a number is kept) can be changed
+    // on it since; core keeps its label as a device's.
+    const attrs: EndpointAttrs = defined({
+      label: update.label,
       unit: update.unit,
       deviceClass: update.deviceClass,
       category: update.category,
@@ -195,7 +195,7 @@ export class DeviceWriter {
 
     const deviceClass = classOf(update);
     if (deviceClass && !(await this.attrsOf<DeviceAttrs>(devicePath(update.device)))?.class) {
-      await this.options.cmd.sys.vfs.update(this.access, devicePath(update.device), { attrs: { class: deviceClass } });
+      await this.options.devices.ensureDevice(this.access, update.device, { class: deviceClass });
     }
   }
 }
