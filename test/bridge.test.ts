@@ -9,7 +9,7 @@ import { assertEquals, assertExists, assertStringIncludes } from '@std/assert';
 import type { DeviceHistory, DeviceInfo, DriverSummary } from '@ein/api';
 import { createTestContext, type ShellClient } from '@ein/testing';
 import type { AutomationStatus } from '@automation/api';
-import { esphomeConfigs, esphomeStates, shellyButton, shellyPlug } from './fixtures.ts';
+import { esphomeConfigs, esphomeStates, shellyButton, shellyGen1Plug, shellyPlug } from './fixtures.ts';
 import { startStubBroker } from './stub-broker.ts';
 
 /** Ask until `check` holds, or fail with what it last saw. */
@@ -192,6 +192,16 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
       assertEquals([status.connected, status.devices, status.endpoints], [true, 2, 7]);
       assertEquals(status.messages > 10, true);
       assertStringIncludes(await admin.execString('JSON_OUTPUT=0 automation-status --brief'), '2 devices, 7 endpoints');
+    });
+
+    await t.step('a first generation plug heard by its power before its relay is a plug all the same', async () => {
+      const plug = shellyGen1Plug;
+      broker.publish(plug.power.topic, plug.power.payload);
+      const heard = await until('its power', () => admin.execJson<DeviceInfo>('device-show shellyplug-s-a1b2c3d4e5f6'), (info) => info.endpointList.length === 1);
+      assertEquals(heard.class, undefined, 'the power it draws says nothing of what it is');
+      broker.publish(plug.relay.topic, plug.relay.payload);
+      const info = await until('a plug', () => admin.execJson<DeviceInfo>('device-show shellyplug-s-a1b2c3d4e5f6'), (info) => info.class === 'plug');
+      assertEquals([info.driver, info.endpointList.map((endpoint) => [endpoint.name, endpoint.type])], ['shelly-gen1', [['relay-0', 'control'], ['relay-0-power', 'log']]]);
     });
   } finally {
     for (const client of clients) client.close();

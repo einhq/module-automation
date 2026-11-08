@@ -47,25 +47,33 @@ const endpointOf = (update: EntityUpdate): { type: EndpointType; schema?: Contro
 };
 
 /**
- * What a device is, by the first of its entities that says: a plug, a light, a switch, a button or
- * a sensor. One about the device itself (its own temperature, its signal) does not say.
+ * What an entity says its device is, and how much that says: what it switches says the most (a plug,
+ * a light), what it senses or a button next, a bare switch least. A reading of the electricity it
+ * switches (power, energy, voltage, current) says nothing, nor one about the device itself (its own
+ * temperature, its signal): a plug whose power is heard before its relay is a plug, and a
+ * multisensor with a relay a sensor, whichever comes first.
  */
-const classOf = (update: EntityUpdate): string | undefined => {
+const classOf = (update: EntityUpdate): { name: string; rank: number } | undefined => {
   if (update.category) return undefined;
   switch (update.entityKind) {
     case 'switch':
-      return update.deviceClass === 'outlet' ? 'plug' : 'switch';
+      return update.deviceClass === 'outlet' ? { name: 'plug', rank: 3 } : { name: 'switch', rank: 1 };
     case 'light':
-      return 'light';
+      return { name: 'light', rank: 3 };
     case 'button':
-      return 'button';
+      return { name: 'button', rank: 2 };
     case 'sensor':
     case 'binary':
-      return 'sensor';
+      return ELECTRIC.has(update.deviceClass ?? '') ? undefined : { name: 'sensor', rank: 2 };
     default:
       return undefined;
   }
 };
+
+const ELECTRIC = new Set(['power', 'energy', 'voltage', 'current']);
+
+/** How much a class a device has says, as `classOf` ranks it; a person's own word is never replaced. */
+const rankOf = (name: string): number => ({ plug: 3, light: 3, sensor: 2, button: 2, switch: 1 } as Record<string, number>)[name] ?? Infinity;
 
 /** A value written to a control, as a source's command takes it. */
 export const commandValue = (value: DeviceValue): string => value === true ? 'on' : value === false ? 'off' : value === null ? '' : String(value);
@@ -193,9 +201,11 @@ export class DeviceWriter {
     await this.options.devices.ensureEndpoint(this.access, update.device, update.entity, type, attrs);
     this.endpoints.set(`${update.device}/${update.entity}`, type);
 
+    // A class the device has is replaced only by one that says more.
     const deviceClass = classOf(update);
-    if (deviceClass && !(await this.attrsOf<DeviceAttrs>(devicePath(update.device)))?.class) {
-      await this.options.devices.ensureDevice(this.access, update.device, { class: deviceClass });
+    const current = (await this.attrsOf<DeviceAttrs>(devicePath(update.device)))?.class;
+    if (deviceClass && (!current || deviceClass.rank > rankOf(current))) {
+      await this.options.devices.ensureDevice(this.access, update.device, { class: deviceClass.name });
     }
   }
 }
