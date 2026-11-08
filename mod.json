@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "Devices, readings, queues and rules: sensors, buttons and switches over MQTT, each reading kept as history and published on routing keys for queues and logs to take",
   "license": "MIT",
-  "coreApi": "^0.12.15",
+  "coreApi": "^0.13.0",
   "exports": {
     "./api": "./lib/api.ts"
   },
