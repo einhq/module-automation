@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { DeviceHistory, DeviceInfo, EntitySummary } from '../../lib/api.ts';
 import { TrackerSetup } from '../components/TrackerSetup.tsx';
-import { agoText, readingText } from '../lib/format.ts';
+import { agoText, chartLabel, readingText } from '../lib/format.ts';
 
 const TABS = ['overview', 'history', 'info'] as const;
 type Tab = typeof TABS[number];
@@ -133,10 +133,13 @@ function Overview({ info, onChanged }: { info: DeviceInfo; onChanged: () => void
   );
 }
 
-/** An entity's readings over a span, summed up per interval: the average of a reading, the share of time on of a switch. */
+/**
+ * An entity's readings over a span, summed up per interval: the average of a reading, the share of
+ * time on of a switch. The device's main reading is charted first.
+ */
 function History({ info }: { info: DeviceInfo }) {
   const charted = info.entityList.filter((entity) => !entity.retired && ['sensor', 'binary', 'switch', 'light', 'number'].includes(entity.kind));
-  const [entity, setEntity] = useState<string | null>(charted[0]?.name ?? null);
+  const [entity, setEntity] = useState<string | null>((charted.find((each) => each.name === info.main?.entity) ?? charted[0])?.name ?? null);
   const [span, setSpan] = useState<Span>('day');
   const [history, setHistory] = useState<DeviceHistory>();
   useEffect(() => {
@@ -147,7 +150,7 @@ function History({ info }: { info: DeviceInfo }) {
       .catch(failed);
   }, [info.name, entity, span]);
   if (!charted.length) return <EmptyState title='Nothing to chart'>The device has no readings or states kept over time.</EmptyState>;
-  const points = (history?.readings ?? []).flatMap((reading) => typeof reading.value === 'number' ? [{ label: reading.at, value: reading.value }] : []);
+  const points = (history?.readings ?? []).flatMap((reading) => typeof reading.value === 'number' ? [{ label: chartLabel(reading.at), value: reading.value }] : []);
   const chosen = charted.find((each) => each.name === entity);
   return (
     <Stack gap='md'>

@@ -92,7 +92,6 @@ export default function DevicesPage() {
                     title={device.label}
                     description={descriptionOf(device)}
                     kind='device'
-                    icon='plug'
                     onClick={() => navigate(`/devices/${encodeURIComponent(device.name)}`)}
                     badges={
                       <>
