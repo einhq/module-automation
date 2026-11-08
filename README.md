@@ -3,7 +3,7 @@
 MQTT drivers and rules for EiN's devices. The `automation-bridge` service listens on an MQTT broker
 and drives what it hears as devices under `/dev`: `ha-discovery` for anything that announces itself
 the way Home Assistant reads (ESPHome, Zigbee2MQTT), `shelly` for Shelly's second generation and
-later. Their readings and presses become the devices' endpoints, published on `dev.<device>.<endpoint>`
+later, `shelly-gen1` for the first (Plug S, 1, 1PM, 2.5, i3). Their readings and presses become the devices' endpoints, published on `dev.<device>.<endpoint>`
 for queues and logs to take, and a value written to a control (`echo on > /dev/hall-plug/switch-0`)
 is sent to the device. The `automation-rules` service runs the rules under `/etc/automation/rules`
 when a reading, a press, a device coming or going or the clock says so.
