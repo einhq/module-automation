@@ -26,8 +26,18 @@ Deno.test({ name: 'devices made by hand', sanitizeResources: false, sanitizeOps:
     const bo = await signIn('bo');
 
     await t.step("the devices root is the automation group's, with no broker set", async () => {
-      const root = await admin.execJson<{ props: { gid: number } }>('stat /archive/devices');
-      assertEquals(root.props.gid, (await admin.execJson<{ gid: number }>('group-info automation')).gid);
+      // The bridge service makes the group and gives it the root at its start, which a loaded
+      // machine reaches after the boot.
+      const end = Date.now() + 10_000;
+      let seen: [number | undefined, number | undefined] = [undefined, undefined];
+      while (Date.now() < end) {
+        const group = await admin.exec('group-info automation');
+        const automation = group.success ? (group.data as { gid?: number } | undefined)?.gid : undefined;
+        seen = [(await admin.execJson<{ props: { gid: number } }>('stat /archive/devices')).props.gid, automation];
+        if (automation !== undefined && seen[0] === automation) break;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      assertEquals(seen[0], seen[1]);
     });
 
     await t.step('a member makes a device with a position, kept as a track', async () => {
