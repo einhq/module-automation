@@ -44,7 +44,7 @@ Deno.test({ name: 'automation rules', sanitizeResources: false, sanitizeOps: fal
   try {
     await admin.execString('user-create anna && user-passwd anna --new-password hunter2 && user-create bo && user-passwd bo --new-password hunter2');
     await until('the services', () => admin.execJson<AutomationStatus>('automation-status'), (status) => status.connected && status.rules !== undefined);
-    await admin.execString('group-add-member automation anna');
+    await admin.execString('group-add-member automation anna && group-add-member devices anna');
     const signIn = async (username: string) => {
       const client = await testCtx.server.createShellClient({ username, password: 'hunter2' });
       clients.push(client);

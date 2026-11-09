@@ -7,7 +7,7 @@
 
 import { assertEquals, assertExists, assertStringIncludes } from '@std/assert';
 import type { DeviceHistory, DeviceInfo, DriverSummary } from '@ein/api';
-import { createTestContext, type ShellClient } from '@ein/testing';
+import { createTestContext, type ShellClient, testCommands } from '@ein/testing';
 import type { AutomationStatus } from '@automation/api';
 import { esphomeConfigs, esphomeStates, shellyButton, shellyGen1Plug, shellyPlug } from './fixtures.ts';
 import { startStubBroker } from './stub-broker.ts';
@@ -41,6 +41,7 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
 
   try {
     for (const name of ['anna', 'bo']) await admin.execString(`user-create ${name} && user-passwd ${name} --new-password hunter2`);
+    await admin.execString('group-add-member devices anna');
     const signIn = async (username: string) => {
       const client = await testCtx.server.createShellClient({ username, password: 'hunter2' });
       clients.push(client);
@@ -76,15 +77,16 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
         'a4cf12000001',
       ]);
       assertEquals(info.endpointList.map((endpoint) => [endpoint.name, endpoint.type, endpoint.schema?.type, endpoint.last?.value, endpoint.writable]), [
-        ['motion', 'log', undefined, false, false],
+        ['motion', 'log', undefined, false, true],
         ['relay', 'control', 'bool', true, true],
-        ['temperature', 'log', undefined, 21.4, false],
+        ['temperature', 'log', undefined, 21.4, true],
       ]);
       assertEquals(info.main, { endpoint: 'temperature', label: 'Temperature', value: 21.4, unit: '°C' });
     });
 
-    await t.step('a reading is kept on its endpoint and reaches a queue someone bound to its key', async () => {
-      await anna.execString("mkqueue -k 'dev.hall-sensor.#' /home/anna/hall");
+    await t.step('a reading is kept on its endpoint and reaches a queue the administrator bound to its key', async () => {
+      await testCommands(anna).shouldFailWith("mkqueue -k 'dev.hall-sensor.#' /home/anna/hall", 'routingKeys');
+      await admin.execString("mkqueue -k 'dev.hall-sensor.#' /home/admin/hall");
       broker.publish('hall-sensor/sensor/temperature/state', '22.0', { retain: true });
       const history = await until(
         'history',
@@ -92,7 +94,7 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
         (history) => history.readings.length === 2,
       );
       assertEquals([history.unit, history.readings.map((reading) => reading.value)], ['°C', [21.4, 22]]);
-      const queued = await until('queue', () => anna.execString('queue-peek /home/anna/hall'), (text) => text.includes('"value":22'));
+      const queued = await until('queue', () => admin.execString('queue-peek /home/admin/hall'), (text) => text.includes('"value":22'));
       assertStringIncludes(queued, '"endpoint":"temperature"');
     });
 
@@ -121,20 +123,22 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
     });
 
     await t.step('a button press is an event on the bus', async () => {
-      await bo.execString("mkqueue -k 'dev.#' /home/bo/presses");
+      await admin.execString("mkqueue -k 'dev.#' /home/admin/presses");
       broker.publish(shellyButton.press.topic, shellyButton.press.payload);
       broker.publish(shellyButton.longPress.topic, shellyButton.longPress.payload);
-      const presses = await until('presses', () => bo.execString('queue-peek -n 50 /home/bo/presses'), (text) => text.includes('long'));
+      const presses = await until('presses', () => admin.execString('queue-peek -n 50 /home/admin/presses'), (text) => text.includes('long'));
       assertStringIncludes(presses, '"value":"single"');
       assertStringIncludes(presses, '"event":true');
-      const button = await bo.execJson<DeviceInfo>('device-show porch-button');
+      const button = await anna.execJson<DeviceInfo>('device-show porch-button');
       assertEquals([button.class, button.endpointList.map((endpoint) => [endpoint.name, endpoint.type, endpoint.events])], ['button', [['input-0', 'log', true]]]);
     });
 
-    await t.step('writing a control sends the device what it understands, as anyone in the users group', async () => {
+    await t.step('writing a control sends the device what it understands, as a member or someone it is shared with', async () => {
       await anna.execString('echo off > /dev/hall-plug/switch-0');
       const calls = broker.published.filter((message) => message.topic === 'hall-plug/rpc').map((message) => JSON.parse(message.payload));
       assertEquals(calls.find((call) => call.method === 'Switch.Set')?.params, { id: 0, on: false });
+      await testCommands(bo).shouldFailWith('echo on > /dev/hall-sensor/relay', 'denied');
+      await anna.execString('share-set -m u:bo:rx /dev/hall-sensor && share-set -m u:bo:rwx /dev/hall-sensor/relay');
       await bo.execString('echo on > /dev/hall-sensor/relay');
       assertEquals(broker.published.filter((message) => message.topic === 'hall-sensor/switch/relay/command').at(-1)?.payload, 'ON');
       // A toggle goes against what the relay last reported, which is still on.
@@ -154,7 +158,7 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
 
     await t.step('a value the control does not take, and a reading, are refused', async () => {
       assertEquals((await anna.exec('echo dim > /dev/hall-plug/switch-0')).success, false);
-      assertEquals((await anna.exec('echo 20 > /dev/hall-sensor/temperature')).success, false);
+      assertEquals((await bo.exec('echo 20 > /dev/hall-sensor/temperature')).success, false);
     });
 
     await t.step('who may write a control is its mode', async () => {
@@ -174,10 +178,8 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
     });
 
     await t.step('a member of the devices group forgets a device; the broker stops replaying it, so it stays gone', async () => {
-      assertEquals((await anna.exec('device-forget hall-sensor')).success, false);
-      await admin.execString('group-add-member devices anna');
-      const member = await signIn('anna');
-      await member.execString('device-forget hall-sensor');
+      assertEquals((await bo.exec('device-forget hall-sensor')).success, false);
+      await anna.execString('device-forget hall-sensor');
       assertEquals((await admin.exec('stat /dev/hall-sensor')).success, false);
       for (const message of esphomeConfigs) assertEquals(broker.retained.has(message.topic), false, message.topic);
       broker.dropClients();
