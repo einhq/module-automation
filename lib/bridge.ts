@@ -5,7 +5,8 @@
  * `ein/discovery/`, which it keeps as the hosts on the network `automation-found` names. When the
  * connection is lost it connects again, waiting 1 s, then twice as long each time up to a minute,
  * so a broker that is away never ends the service. Beside the sources it runs the polled drivers
- * (`network`, `ipp`, `snmp`, `cast`, `http`), which ask their devices themselves.
+ * (`network`, `ipp`, `snmp`, `cast`, `http`), which ask their devices themselves; without a broker
+ * (`connect` unset) it runs those alone.
  *
  * Each source is registered with core as the driver of the devices it finds, for as long as the
  * bridge runs. A value written to one of their controls (`echo on > /dev/hall-plug/switch-0`),
@@ -26,8 +27,10 @@ import { type BridgeState, setBridgeState } from './state.ts';
 
 type BridgeOptions = {
   cmd: Command;
+  /** The broker's address; empty without one. */
   url: string;
-  connect: MqttConnect;
+  /** Unset without a broker: then only the polled drivers run. */
+  connect?: MqttConnect;
   sources: RunningSource[];
   /** The drivers that ask devices on the network themselves, run beside the sources. */
   polled: PolledDriver[];
@@ -116,10 +119,16 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
   };
 
   let backoff = MIN_BACKOFF_MS;
-  await log(`drivers ${state.drivers.join(', ')}; connecting to ${options.url}`);
-  while (!stopping) {
+  const connect = options.connect;
+  if (connect) {
+    await log(`drivers ${state.drivers.join(', ')}; connecting to ${options.url}`);
+  } else {
+    await log(`drivers ${state.drivers.join(', ')}; no broker set, so only the devices asked over the network are read`);
+    await stopped;
+  }
+  while (connect && !stopping) {
     try {
-      connection = await options.connect(onMessage);
+      connection = await connect(onMessage);
       state.connected = true;
       state.since = Date.now();
       state.lastError = undefined;

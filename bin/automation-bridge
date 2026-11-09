@@ -4,8 +4,8 @@
  * them as core's devices under /dev, one driver per source (ha-discovery, shelly), sending them what
  * is written to their controls, and asks the devices of the polled drivers (network, ipp, snmp, cast, http).
  *
- * Off while CFG_AUTOMATION_MQTT_URL is empty: it says so and ends. Otherwise it runs until stopped,
- * connecting again whenever the broker goes away.
+ * While CFG_AUTOMATION_MQTT_URL is empty it hears no broker and runs the polled drivers alone.
+ * It runs until stopped, connecting again whenever the broker goes away.
  */
 
 import { type CmdReturn, type Command, serviceKey } from '@ein/client';
@@ -21,10 +21,6 @@ const DEFAULT_MIN_INTERVAL_SECONDS = 10;
 
 const automationBridge = async (cmd: Command): CmdReturn => {
   const url = (cmd.env.CFG_AUTOMATION_MQTT_URL ?? '').trim();
-  if (!url) {
-    await cmd.writeLn('automation-bridge: off, CFG_AUTOMATION_MQTT_URL is empty: no device is heard');
-    return 0;
-  }
   const devices = cmd.sys.devices;
   if (!devices) {
     await cmd.writeError('automation-bridge: this EiN keeps no devices, so there is nothing to drive\n');
@@ -38,10 +34,12 @@ const automationBridge = async (cmd: Command): CmdReturn => {
 
   const clientId = `ein-automation-${crypto.randomUUID().slice(0, 8)}`;
   const names = (cmd.env.CFG_AUTOMATION_SOURCES || DEFAULT_SOURCES).split(/[\s,]+/).filter(Boolean);
-  const { sources, unknown } = createSources(names, {
-    discoveryPrefix: cmd.env.CFG_AUTOMATION_DISCOVERY_PREFIX || 'homeassistant',
-    clientId,
-  });
+  const { sources, unknown } = url
+    ? createSources(names, {
+      discoveryPrefix: cmd.env.CFG_AUTOMATION_DISCOVERY_PREFIX || 'homeassistant',
+      clientId,
+    })
+    : { sources: [], unknown: [] };
   if (unknown.length) await cmd.writeError(`automation-bridge: no source called ${unknown.join(', ')}\n`);
   const seconds = Number(cmd.env.CFG_AUTOMATION_MIN_INTERVAL);
   const writer = new DeviceWriter({
@@ -51,8 +49,8 @@ const automationBridge = async (cmd: Command): CmdReturn => {
     minInterval: Number.isFinite(seconds) && seconds >= 0 ? seconds : DEFAULT_MIN_INTERVAL_SECONDS,
     log: (line) => cmd.writeError(`automation-bridge: ${line}\n`).catch(() => {}),
   });
-  const password = await serviceKey(cmd, 'CFG_AUTOMATION_MQTT_KEY', 'CFG_AUTOMATION_MQTT_URL');
-  const connect = connectMqtt({ url, clientId, username: cmd.env.CFG_AUTOMATION_MQTT_USER, password });
+  const password = url ? await serviceKey(cmd, 'CFG_AUTOMATION_MQTT_KEY', 'CFG_AUTOMATION_MQTT_URL') : undefined;
+  const connect = url ? connectMqtt({ url, clientId, username: cmd.env.CFG_AUTOMATION_MQTT_USER, password }) : undefined;
   await runBridge({ cmd, url, connect, sources, polled: createPolledDrivers(fetch), devices, writer, stopped });
   return 0;
 };

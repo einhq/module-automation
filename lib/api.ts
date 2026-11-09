@@ -5,7 +5,7 @@
 
 /** `automation-status`: the bridge and its drivers, as this process sees them, and the rules. */
 export type AutomationStatus = {
-  /** False when the broker address is unset: automation is off. */
+  /** False when the broker address is unset: only the devices asked over the network are read. */
   configured: boolean;
   url?: string;
   /** Whether the bridge runs in this process. */

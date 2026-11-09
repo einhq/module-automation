@@ -33,7 +33,7 @@
         "label": "MQTT broker",
         "description": "The broker devices talk to, as mqtt://host:1883 or mqtts://host:8883. setup.sh --mqtt runs one beside EiN and sets this.",
         "group": "Automation",
-        "emptyMeans": "automation is off: no device is heard",
+        "emptyMeans": "no device is heard on a broker; those EiN asks over the network are still read",
         "restarts": [
           "automation-bridge"
         ]

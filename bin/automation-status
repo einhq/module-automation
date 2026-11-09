@@ -50,15 +50,15 @@ const statusOf = async (cmd: Command): Promise<AutomationStatus> => {
 };
 
 const brief = (status: AutomationStatus): string => {
-  if (!status.configured) return 'off: no broker set';
   if (!status.running) return 'not running';
+  if (!status.configured) return `${status.devices} devices, ${status.endpoints} endpoints; no broker set, so only the devices asked over the network are read`;
   if (!status.connected) return `cannot reach ${status.url}${status.lastError ? `: ${status.lastError}` : ''}`;
   return `${status.devices} devices, ${status.endpoints} endpoints, ${status.messages} messages`;
 };
 
 const checks = (status: AutomationStatus): HealthCheck[] => {
-  if (!status.configured) return [];
   if (!status.running) return [{ name: 'automation bridge', state: 'fail', reason: 'the automation-bridge service is not running' }];
+  if (!status.configured) return [{ name: 'automation bridge', state: 'ok', reason: brief(status) }];
   if (!status.connected) {
     return [{ name: 'automation bridge', state: 'warn', reason: `cannot reach the broker at ${status.url}${status.lastError ? `: ${status.lastError}` : ''}` }];
   }
