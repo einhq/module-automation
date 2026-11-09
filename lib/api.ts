@@ -84,8 +84,11 @@ export type NetworkIdentity = {
   class?: string;
   /** It can become a device of automation's, by `automation-adopt` or by hand as `connect` says. */
   addable: boolean;
-  /** The driver `automation-adopt` points it at the broker for, when it can. */
-  adopt?: 'shelly' | 'shelly-gen1';
+  /**
+   * The driver `automation-adopt` adds it with: a Shelly's, which it points at the broker, or one
+   * that asks the device itself (`network`, `ipp`, `cast`).
+   */
+  adopt?: 'shelly' | 'shelly-gen1' | 'network' | 'ipp' | 'cast';
   /** What adding it does, or what it takes. */
   connect?: string;
 };
@@ -114,5 +117,11 @@ export type FoundAnswer = {
   devices: FoundDevice[];
 };
 
-/** `automation-adopt`: what the device was told, and that it restarts. */
-export type AdoptAnswer = { id: string; label: string; driver: string; broker: string; restarted: boolean };
+/**
+ * `automation-adopt`: the driver it was added with. A Shelly was told the broker and restarts, and
+ * becomes a device when it is back; any other is the device `device` at once.
+ */
+export type AdoptAnswer = { id: string; label: string; driver: string; broker?: string; restarted: boolean; device?: string };
+
+/** `automation-found <id>`: one host, and everything the network listener heard of it. */
+export type FoundDetail = FoundDevice & { host: NetworkHost };

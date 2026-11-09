@@ -22,6 +22,9 @@ const described = (host: NetworkHost, test: (each: Ssdp) => boolean): Ssdp | und
 /** A host's name without `.local`. */
 const stem = (name: string): string => name.replace(/\.local\.?$/, '');
 
+/** What becomes a device over MQTT, and so is not added as a bare host. */
+const MQTT_ONLY = new Set(['esphome', 'tasmota']);
+
 const SHELLY_GEN1_CONNECT = 'Turns on MQTT in the Shelly, pointed at EiN’s broker, and restarts it. Shelly’s cloud is turned off while MQTT is on.';
 
 const PATTERNS: Pattern[] = [
@@ -70,14 +73,14 @@ const PATTERNS: Pattern[] = [
       const matter = services(host, (each) => each.type === '_matter._tcp' || each.type === '_matterc._udp');
       return matter && { label: matter.txt.DN || matter.instance };
     },
-    identity: { kind: 'matter', vendor: 'Matter', addable: false, connect: 'Matter devices cannot be added yet.' },
+    identity: { kind: 'matter', vendor: 'Matter', addable: true, connect: 'Added, it says whether it answers; Matter itself is not spoken yet.' },
   },
   {
     match: (host) => {
       const hap = service(host, '_hap._tcp');
       return hap && { label: hap.instance, model: hap.txt.md };
     },
-    identity: { kind: 'homekit', vendor: 'HomeKit', addable: false, connect: 'HomeKit accessories cannot be added yet.' },
+    identity: { kind: 'homekit', vendor: 'HomeKit', addable: true, connect: 'Added, it says whether it answers; HomeKit itself is not spoken yet.' },
   },
   {
     match: (host) => {
@@ -88,8 +91,8 @@ const PATTERNS: Pattern[] = [
       kind: 'hue',
       vendor: 'Philips Hue',
       class: 'hub',
-      addable: false,
-      connect: 'The lights behind a Hue bridge cannot be added yet; Zigbee2MQTT with a stick of its own brings Zigbee lights.',
+      addable: true,
+      connect: 'Added, it says whether it answers; the lights behind it are not read yet, and Zigbee2MQTT with a stick of its own brings Zigbee lights.',
     },
   },
   {
@@ -98,42 +101,49 @@ const PATTERNS: Pattern[] = [
       const upnp = described(host, (each) => /sonos/i.test(each.manufacturer ?? ''));
       return (sonos || upnp) && { label: upnp?.friendlyName ?? sonos?.instance, model: upnp?.modelName };
     },
-    identity: { kind: 'sonos', vendor: 'Sonos', class: 'speaker', addable: false },
+    identity: { kind: 'sonos', vendor: 'Sonos', class: 'speaker', addable: true },
   },
   {
     match: (host) => {
       const cast = service(host, '_googlecast._tcp');
       return cast && { label: cast.txt.fn || cast.instance, model: cast.txt.md };
     },
-    identity: { kind: 'cast', vendor: 'Google Cast', class: 'media', addable: false },
+    identity: {
+      kind: 'cast',
+      vendor: 'Google Cast',
+      class: 'speaker',
+      addable: true,
+      adopt: 'cast',
+      connect: 'Added, it says what it plays, and its volume, mute, play, pause and stop can be set.',
+    },
   },
   {
     match: (host) => {
       const airplay = services(host, (each) => each.type === '_airplay._tcp' || each.type === '_raop._tcp');
       return airplay && { label: airplay.instance.replace(/^[0-9A-F]{12}@/, ''), model: airplay.txt.model ?? airplay.txt.am };
     },
-    identity: { kind: 'airplay', vendor: 'AirPlay', class: 'media', addable: false },
+    identity: { kind: 'airplay', vendor: 'AirPlay', class: 'media', addable: true },
   },
   {
     match: (host) => {
       const printer = services(host, (each) => ['_ipp._tcp', '_ipps._tcp', '_printer._tcp', '_pdl-datastream._tcp'].includes(each.type));
       return printer && { label: printer.instance, model: printer.txt.ty ?? printer.txt.product?.replace(/^\(|\)$/g, '') };
     },
-    identity: { kind: 'printer', class: 'printer', addable: false },
+    identity: { kind: 'printer', class: 'printer', addable: true, adopt: 'ipp', connect: 'Added, it says its state, its warnings and how much ink or toner is left.' },
   },
   {
     match: (host) => {
       const router = described(host, (each) => /InternetGatewayDevice/.test(each.deviceType ?? ''));
       return router && { label: router.friendlyName, model: router.modelName };
     },
-    identity: { kind: 'router', class: 'router', addable: false },
+    identity: { kind: 'router', class: 'router', addable: true },
   },
   {
     match: (host) => {
       const renderer = described(host, (each) => /MediaRenderer/.test(each.deviceType ?? ''));
       return renderer && { label: renderer.friendlyName, model: renderer.modelName };
     },
-    identity: { kind: 'media', class: 'media', addable: false },
+    identity: { kind: 'media', class: 'media', addable: true },
   },
   {
     match: (host) => {
@@ -141,7 +151,7 @@ const PATTERNS: Pattern[] = [
         described(host, (each) => /synology|qnap/i.test(each.manufacturer ?? ''));
       return nas && { label: 'instance' in nas ? nas.instance : nas.friendlyName, model: 'modelName' in nas ? nas.modelName : undefined };
     },
-    identity: { kind: 'storage', class: 'storage', addable: false },
+    identity: { kind: 'storage', class: 'storage', addable: true },
   },
 ];
 
@@ -150,21 +160,27 @@ const fallback = (host: NetworkHost): NetworkIdentity => {
   const upnp = described(host, () => true);
   return {
     kind: 'other',
-    addable: false,
+    addable: true,
+    adopt: 'network',
+    connect: PRESENCE,
     ...(upnp?.manufacturer ? { vendor: upnp.manufacturer } : {}),
     label: upnp?.friendlyName ?? host.mdns[0]?.instance ?? (host.names[0] ? stem(host.names[0]) : host.ip),
     ...(upnp?.modelName ? { model: upnp.modelName } : {}),
   };
 };
 
-/** What `host` is. */
+const PRESENCE = 'Added, it says whether it answers and how fast.';
+
+/** What `host` is. Anything that can be added and has no driver of its own is added as `network`. */
 export const identify = (host: NetworkHost): NetworkIdentity => {
   for (const pattern of PATTERNS) {
     const found = pattern.match(host);
     if (!found) continue;
     const label = found.label || (host.names[0] ? stem(host.names[0]) : host.ip);
+    const presence = pattern.identity.addable && !pattern.identity.adopt && !MQTT_ONLY.has(pattern.identity.kind);
     return {
       ...pattern.identity,
+      ...(presence ? { adopt: 'network' as const, connect: pattern.identity.connect ?? PRESENCE } : {}),
       label,
       ...(found.model ? { model: found.model } : {}),
       ...(found.firmware ? { firmware: found.firmware } : {}),

@@ -4,8 +4,9 @@
  * `ein/discovery/status`. The broker replays them to every connection, so nothing here is kept
  * across restarts.
  *
- * `foundDevices` names each host (`identify`) and matches it to a device under /dev: by hardware
- * address, or by a name it answers to, which is the name Shelly's and ESPHome's MQTT give it.
+ * `foundDevices` names each host (`identify`) and matches it to a device under /dev: the one added
+ * from it, else by hardware address, or by a name it answers to, which is the name Shelly's and
+ * ESPHome's MQTT give it.
  */
 
 import { deviceName } from '@ein/api';
@@ -17,8 +18,8 @@ const NETWORK_PREFIX = 'ein/discovery';
 
 type ListenerStatus = { round?: string; broker?: string };
 
-/** A device under /dev, as much of it as matching needs. */
-export type KnownDevice = { name: string; mac?: string };
+/** A device under /dev, as much of it as matching needs: `found` is the host it was added from. */
+export type KnownDevice = { name: string; mac?: string; found?: string };
 
 const HOST_TOPIC = `${NETWORK_PREFIX}/host/`;
 const STATUS_TOPIC = `${NETWORK_PREFIX}/status`;
@@ -71,8 +72,9 @@ export class NetworkHosts {
 export const foundDevices = (network: NetworkHosts, devices: KnownDevice[], ignored: Set<string>): FoundAnswer => {
   const byMac = new Map(devices.filter((device) => device.mac).map((device) => [macKey(device.mac!), device.name]));
   const byName = new Set(devices.map((device) => device.name));
+  const byFound = new Map(devices.filter((device) => device.found).map((device) => [device.found!, device.name]));
   const found: FoundDevice[] = [...network.hosts].map(([id, host]) => {
-    const device = (host.mac ? byMac.get(macKey(host.mac)) : undefined) ?? namesOf(host).map(deviceName).find((name) => byName.has(name));
+    const device = byFound.get(id) ?? (host.mac ? byMac.get(macKey(host.mac)) : undefined) ?? namesOf(host).map(deviceName).find((name) => byName.has(name));
     return {
       ...identify(host),
       id,

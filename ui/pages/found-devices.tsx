@@ -4,8 +4,9 @@ import { countOf, matchesText, shq } from '@ein/ui/lib';
 import { execCommand, notify } from '@ein/ui/signals';
 import { Alert, Badge, Box, Button, Card, Group, SimpleGrid, Stack, Text } from '@mantine/core';
 import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import type { FoundAnswer, FoundDevice } from '@automation/api';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import type { AdoptAnswer, FoundAnswer, FoundDevice } from '@automation/api';
+import { FoundDetailModal } from '../components/FoundDetailModal.tsx';
 
 export const handle = { fullBleed: true };
 
@@ -36,16 +37,33 @@ const agoText = (iso: string): string => {
   return minutes < 1 ? 'just now' : minutes < 120 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`;
 };
 
-function FoundCard({ found, onChanged }: { found: FoundDevice; onChanged: () => void }) {
+function FoundCard({ found, onChanged, onOpen }: { found: FoundDevice; onChanged: () => void; onOpen: () => void }) {
   const navigate = useNavigate();
   const [busy, setBusy] = useState<'add' | 'ignore' | null>(null);
   const what = [found.vendor, found.model].filter(Boolean).join(' ');
 
-  const run = async (kind: 'add' | 'ignore', command: string, done?: string) => {
-    setBusy(kind);
+  const ignore = async () => {
+    setBusy('ignore');
     try {
-      await execCommand(command);
-      if (done) notify({ message: done, color: 'green' });
+      await execCommand(`automation-ignore ${shq(found.id)}${found.ignored ? ' --undo' : ''}`);
+      onChanged();
+    } catch (error) {
+      failed(error);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const add = async () => {
+    setBusy('add');
+    try {
+      const added = await execCommand<AdoptAnswer>(`automation-adopt ${shq(found.id)}`);
+      if (added.device) {
+        const device = added.device;
+        notify({ message: `${found.label} is a device now`, color: 'green', action: { label: 'Open', onClick: () => navigate(`/devices/${encodeURIComponent(device)}`) } });
+      } else {
+        notify({ message: `${found.label} is restarting; it shows up under Devices when it is back`, color: 'green' });
+      }
       onChanged();
     } catch (error) {
       failed(error);
@@ -55,7 +73,7 @@ function FoundCard({ found, onChanged }: { found: FoundDevice; onChanged: () => 
   };
 
   return (
-    <Card radius='md' p='md' withBorder style={{ display: 'flex', flexDirection: 'column' }}>
+    <Card radius='md' p='md' withBorder style={{ display: 'flex', flexDirection: 'column', cursor: 'pointer' }} onClick={onOpen}>
       <Group gap='sm' wrap='nowrap' align='flex-start'>
         <TablerIcon name={ICONS[found.kind] ?? 'device-unknown'} size={28} />
         <Box style={{ minWidth: 0 }}>
@@ -72,7 +90,7 @@ function FoundCard({ found, onChanged }: { found: FoundDevice; onChanged: () => 
         <Badge size='xs' variant='light' color='gray'>seen {agoText(found.seen)}</Badge>
       </Group>
       {found.connect && !found.device && <Text size='xs' c='dimmed' mt='sm'>{found.connect}</Text>}
-      <Group gap='xs' mt='auto' pt='sm'>
+      <Group gap='xs' mt='auto' pt='sm' onClick={(event) => event.stopPropagation()}>
         {found.device && (
           <Button size='xs' variant='light' onClick={() => navigate(`/devices/${encodeURIComponent(found.device!)}`)}>
             Open
@@ -84,7 +102,7 @@ function FoundCard({ found, onChanged }: { found: FoundDevice; onChanged: () => 
             loading={busy === 'add'}
             disabled={busy !== null}
             leftSection={<TablerIcon name='plus' size={14} />}
-            onClick={() => run('add', `automation-adopt ${shq(found.id)}`, `${found.label} is restarting; it shows up under Devices when it is back`)}
+            onClick={add}
           >
             Add
           </Button>
@@ -96,7 +114,7 @@ function FoundCard({ found, onChanged }: { found: FoundDevice; onChanged: () => 
             color='gray'
             loading={busy === 'ignore'}
             disabled={busy !== null}
-            onClick={() => run('ignore', `automation-ignore ${shq(found.id)}${found.ignored ? ' --undo' : ''}`)}
+            onClick={ignore}
           >
             {found.ignored ? 'Take back' : 'Ignore'}
           </Button>
@@ -108,12 +126,21 @@ function FoundCard({ found, onChanged }: { found: FoundDevice; onChanged: () => 
 
 /**
  * What the network listener found on the network, as the people page's unidentified people: the
- * ones that can become a device first, each with Add where EiN can point it at the broker itself
- * and Ignore for the ones no one wants.
+ * ones that can become a device first, each with Add where EiN can add it itself and Ignore for the
+ * ones no one wants. A card opens everything the listener heard of it (`?host=<id>`).
  */
 export default function FoundDevicesPage() {
   const [search, setSearch] = useUrlParam('q');
   const [scope, setScope] = usePersistedState<Scope>('found-devices.scope', 'addable');
+  const [params, setParams] = useSearchParams();
+  const open = params.get('host');
+  const setOpen = (id: string | null) =>
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      if (id) next.set('host', id);
+      else next.delete('host');
+      return next;
+    });
   const { data, loading, error, refetch } = usePolledCommand<FoundAnswer>('automation-found --all');
   const all = useMemo(() => data?.devices ?? [], [data]);
 
@@ -157,7 +184,7 @@ export default function FoundDevicesPage() {
           {loading && !data ? <PageLoader /> : (
             <>
               <SimpleGrid cols={{ base: 1, xs: 2, md: 3, lg: 4 }}>
-                {shown.map((found) => <FoundCard key={found.id} found={found} onChanged={refetch} />)}
+                {shown.map((found) => <FoundCard key={found.id} found={found} onChanged={refetch} onOpen={() => setOpen(found.id)} />)}
               </SimpleGrid>
               {data && shown.length === 0 && (
                 <EmptyState title={scope === 'addable' ? 'Nothing to add' : 'Nothing found'}>
@@ -170,6 +197,7 @@ export default function FoundDevicesPage() {
           )}
         </Stack>
       </Box>
+      {open && <FoundDetailModal id={open} onClose={() => setOpen(null)} />}
     </Box>
   );
 }

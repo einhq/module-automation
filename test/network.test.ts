@@ -1,13 +1,18 @@
 /**
- * What the network listener's hosts are named as, how they are matched to devices under /dev, and
- * what adopting a Shelly sends it: pure, no broker and no network.
+ * What the network listener's hosts are named as, how they are matched to devices under /dev, what
+ * adopting a Shelly sends it, and the IPP and Cast messages the polled drivers speak: no broker, and
+ * no network but this machine's loopback.
  */
 
-import { assertEquals, assertRejects } from '@std/assert';
+import { assertEquals, assertRejects, assertThrows } from '@std/assert';
 import type { NetworkHost } from '../lib/api.ts';
 import { adoptShelly, type Fetch } from '../lib/network/adopt.ts';
 import { foundDevices, NetworkHosts } from '../lib/network/found.ts';
 import { identify } from '../lib/network/identify.ts';
+import { parseIppResponse, printerAttributesRequest } from '../lib/network/ipp.ts';
+import { decodeCastMessage, encodeCastMessage } from '../lib/network/cast.ts';
+import { changesOf, reach } from '../lib/network/polled.ts';
+import { ippResponse } from './fixtures.ts';
 
 const SEEN = '2026-11-09T08:00:00.000Z';
 
@@ -56,16 +61,28 @@ Deno.test('identify', async (t) => {
     const identity = identify(shellyGen1);
     assertEquals([identity.kind, identity.model, identity.adopt], ['shelly-gen1', 'shellyplug-s', 'shelly-gen1']);
   });
-  await t.step('ESPHome can be added by hand, with its friendly name', () => {
+  await t.step('ESPHome is added over MQTT, by hand, with its friendly name', () => {
     const identity = identify(esphome);
     assertEquals([identity.kind, identity.label, identity.model, identity.addable, identity.adopt], ['esphome', 'Hall sensor', 'esp32dev', true, undefined]);
   });
-  await t.step('a printer and a NAS are named, and are no devices of automation', () => {
-    assertEquals([identify(printer).kind, identify(printer).model, identify(printer).addable], ['printer', 'Inkjet 7200', false]);
-    assertEquals([identify(nas).kind, identify(nas).label, identify(nas).model], ['storage', 'Backup box', 'DS216se']);
+  await t.step('a printer is added over IPP, a NAS as whether it answers', () => {
+    assertEquals([identify(printer).kind, identify(printer).model, identify(printer).adopt], ['printer', 'Inkjet 7200', 'ipp']);
+    assertEquals([identify(nas).kind, identify(nas).label, identify(nas).model, identify(nas).adopt], ['storage', 'Backup box', 'DS216se', 'network']);
   });
-  await t.step('what no pattern knows is named from its UPnP description', () => {
-    assertEquals(identify(unknown), { kind: 'other', addable: false, vendor: 'Acme', label: 'Thing', model: 'Widget 2' });
+  await t.step('a Cast speaker is added over Cast', () => {
+    const speaker = host('192.168.1.26', { mdns: [{ type: '_googlecast._tcp', instance: 'Google-Home-Mini-1', txt: { fn: 'Kitchen speaker', md: 'Google Home Mini' } }] });
+    assertEquals([identify(speaker).kind, identify(speaker).label, identify(speaker).adopt, identify(speaker).class], ['cast', 'Kitchen speaker', 'cast', 'speaker']);
+  });
+  await t.step('what no pattern knows is named from its UPnP description, and says whether it answers', () => {
+    assertEquals(identify(unknown), {
+      kind: 'other',
+      addable: true,
+      adopt: 'network',
+      connect: 'Added, it says whether it answers and how fast.',
+      vendor: 'Acme',
+      label: 'Thing',
+      model: 'Widget 2',
+    });
   });
 });
 
@@ -136,4 +153,64 @@ Deno.test('adoptShelly', async (t) => {
     const { fetcher } = recorder(401);
     await assertRejects(() => adoptShelly(fetcher, '192.168.1.20', 'shelly', broker), Error, 'password of its own');
   });
+});
+
+Deno.test('IPP', async (t) => {
+  await t.step('the request names the printer and what is asked of it', () => {
+    const text = new TextDecoder().decode(printerAttributesRequest('ipp://192.168.1.23:631/ipp/print'));
+    assertEquals(['ipp://192.168.1.23:631/ipp/print', 'marker-levels', 'printer-state'].every((each) => text.includes(each)), true);
+  });
+  await t.step('an answer is read as its attributes, a name given once for all its values', () => {
+    const attributes = parseIppResponse(ippResponse([
+      [0x23, 'printer-state', [4]],
+      [0x44, 'printer-state-reasons', ['marker-supply-low-warning']],
+      [0x42, 'marker-names', ['black cartridge', 'tri-color cartridge']],
+      [0x21, 'marker-levels', [64, -2]],
+    ]));
+    assertEquals(attributes, {
+      'printer-state': [4],
+      'printer-state-reasons': ['marker-supply-low-warning'],
+      'marker-names': ['black cartridge', 'tri-color cartridge'],
+      'marker-levels': [64, -2],
+    });
+  });
+  await t.step('a refusal is an error', () => {
+    const refused = ippResponse([]);
+    refused[2] = 0x04;
+    assertThrows(() => parseIppResponse(refused), Error, 'IPP status 0x0400');
+  });
+});
+
+Deno.test('a Cast message survives its encoding', () => {
+  const framed = encodeCastMessage('receiver-0', 'urn:x-cast:com.google.cast.receiver', { type: 'GET_STATUS', requestId: 1 });
+  assertEquals(new DataView(framed.buffer).getUint32(0), framed.length - 4);
+  assertEquals(decodeCastMessage(framed.subarray(4)), {
+    source: 'sender-ein',
+    namespace: 'urn:x-cast:com.google.cast.receiver',
+    payload: { type: 'GET_STATUS', requestId: 1 },
+  });
+});
+
+Deno.test('a host answers when it accepts or refuses, and not when it is silent', async () => {
+  const listener = Deno.listen({ hostname: '127.0.0.1', port: 0 });
+  const open = (listener.addr as Deno.NetAddr).port;
+  const closed = Deno.listen({ hostname: '127.0.0.1', port: 0 });
+  const refused = (closed.addr as Deno.NetAddr).port;
+  closed.close();
+  try {
+    assertEquals(typeof await reach('127.0.0.1', [open]), 'number');
+    assertEquals(typeof await reach('127.0.0.1', [refused]), 'number');
+  } finally {
+    listener.close();
+  }
+  await assertRejects(() => reach('192.0.2.1', [9]), Error, 'does not answer');
+});
+
+Deno.test('a poll announces each endpoint once, and says the device is online', () => {
+  const polled = {
+    entities: [{ kind: 'entity' as const, device: 'printer', entity: 'state', label: 'state', entityKind: 'sensor' as const, settable: false, supported: true }],
+    values: { state: 'idle' },
+  };
+  assertEquals(changesOf('printer', polled, new Set()).map((change) => change.kind), ['entity', 'state', 'online']);
+  assertEquals(changesOf('printer', polled, new Set(['state'])).map((change) => change.kind), ['state', 'online']);
 });

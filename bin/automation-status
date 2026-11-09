@@ -14,6 +14,7 @@ import type { CmdReturn, Command, HealthCheck } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import { DEV_PATH, devicePath } from '@ein/paths';
 import type { AutomationStatus } from '@automation/api';
+import { POLLED_DRIVERS } from '@automation/network';
 import { SOURCE_NAMES } from '@automation/sources';
 import { bridgeState, rulesState } from '@automation/state';
 
@@ -22,7 +23,7 @@ const ENDPOINT_TYPES = new Set(['log', 'track', 'control']);
 /** The devices under /dev the caller sees that automation's drivers drive, and their endpoints. */
 const counts = async (cmd: Command): Promise<{ devices: number; endpoints: number }> => {
   const children = await cmd.sys.vfs.children<DeviceAttrs>(cmd.access, DEV_PATH).catch(() => []);
-  const ours = children.filter((child) => child.node.type === 'device' && SOURCE_NAMES.includes(child.node.attrs.driver ?? ''));
+  const ours = children.filter((child) => child.node.type === 'device' && [...SOURCE_NAMES, ...POLLED_DRIVERS].includes(child.node.attrs.driver ?? ''));
   const endpoints = await Promise.all(
     ours.map(async (child) => (await cmd.sys.vfs.children(cmd.access, devicePath(child.name)).catch(() => [])).filter((each) => ENDPOINT_TYPES.has(each.node.type)).length),
   );

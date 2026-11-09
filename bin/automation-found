@@ -7,11 +7,12 @@
  *   automation-found              the ones that are no device yet, and not ignored
  *   automation-found --addable    of those, the ones that can become a device of automation's
  *   automation-found --all        every one, devices and ignored ones too
+ *   automation-found <id>         one, with everything the listener heard of it
  */
 
 import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
-import type { FoundAnswer } from '@automation/api';
-import { assertDevicesMember, readFound } from '@automation/network';
+import type { FoundAnswer, FoundDetail } from '@automation/api';
+import { assertDevicesMember, readFound, readFoundDetail } from '@automation/network';
 
 const ago = (iso: string): string => {
   const minutes = Math.round((Date.now() - Date.parse(iso)) / 60_000);
@@ -27,6 +28,17 @@ const automationFound = async (cmd: Command): CmdReturn => {
   } catch (error) {
     await cmd.writeError(`automation-found: ${error instanceof Error ? error.message : error}\n`);
     return 1;
+  }
+  const id = flags._.length ? String(flags._[0]) : undefined;
+  if (id) {
+    const detail = await readFoundDetail(cmd, id);
+    if (!detail) {
+      await cmd.writeError(`automation-found: nothing called ${id} was heard on the network (automation-found --all)\n`);
+      return 1;
+    }
+    if (cmd.json) await cmd.writeJSON(detail satisfies FoundDetail);
+    else await cmd.writeLn(JSON.stringify(detail, null, 2));
+    return 0;
   }
   const found = await readFound(cmd);
   if (!found) {
@@ -47,7 +59,7 @@ const automationFound = async (cmd: Command): CmdReturn => {
   }
   for (const each of answer.devices) {
     const what = [each.vendor, each.model].filter(Boolean).join(' ') || each.kind;
-    const state = each.device ? `device ${each.device}` : each.ignored ? 'ignored' : each.addable ? (each.adopt ? 'can be added' : 'can be added by hand') : '';
+    const state = each.device ? `device ${each.device}` : each.ignored ? 'ignored' : each.adopt ? `can be added (${each.adopt})` : each.addable ? 'can be added by hand' : '';
     await cmd.writeLn([each.id.padEnd(15), each.ip.padEnd(15), each.label, `(${what})`, state].filter(Boolean).join('  '));
   }
   await cmd.writeLn(`${answer.devices.length} found; the listener's last round ${ago(answer.round)}`);
@@ -63,8 +75,10 @@ automationFound.spec = {
     { name: 'addable', type: 'bool' as const, description: 'only the ones that can become a device of automation’s' },
     { name: 'all', type: 'bool' as const, description: 'every one, the devices already under /dev and the ignored ones too' },
   ],
-  examples: ['automation-found', 'automation-found --addable', 'automation-found --all'],
-  returns: 'FoundAnswer: round, broker, devices [{id, ip, mac, names, seen, services, kind, vendor, label, model, firmware, class, addable, adopt, connect, device, ignored}]',
+  args: [{ name: 'id', type: 'string' as const, optional: true, description: 'one host, by its id or address: it, with all the listener heard of it' }],
+  examples: ['automation-found', 'automation-found --addable', 'automation-found --all', 'automation-found 7c2ebd614055'],
+  returns:
+    'FoundAnswer: round, broker, devices [{id, ip, mac, names, seen, services, kind, vendor, label, model, firmware, class, addable, adopt, connect, device, ignored}]; with an id, FoundDetail: one of those and host {ip, mac, names, seen, mdns, ssdp}',
 };
 
 export default automationFound;

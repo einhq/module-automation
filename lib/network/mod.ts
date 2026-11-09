@@ -3,16 +3,17 @@
  * match hosts to, and the hosts no one wants as devices.
  */
 
-import { type DeviceAttrs, DEVICES_GROUPNAME } from '@ein/api';
+import { type DeviceAttrs, deviceName, DEVICES_GROUPNAME } from '@ein/api';
 import { ADMIN_ACCESS, type Command, isAdmin } from '@ein/client';
-import { DEV_PATH } from '@ein/paths';
-import type { FoundAnswer } from '../api.ts';
+import { DEV_PATH, DEV_RESERVED_NAMES, devicePath } from '@ein/paths';
+import type { FoundAnswer, FoundDetail } from '../api.ts';
 import { gidOf } from '../groups.ts';
 import { NETWORK_IGNORED } from '../paths.ts';
 import { bridgeState } from '../state.ts';
 import { foundDevices, type KnownDevice } from './found.ts';
 
 export { adoptShelly } from './adopt.ts';
+export { createPolledDrivers, POLLED_DRIVERS } from './polled.ts';
 
 /**
  * Throws unless the caller makes devices: the administrator or a member of the devices group. What
@@ -27,7 +28,11 @@ export const assertDevicesMember = async (cmd: Command): Promise<void> => {
 /** Every device under /dev, whoever may read it, by name and hardware address. */
 const knownDevices = async (cmd: Command): Promise<KnownDevice[]> => {
   const children = await cmd.sys.vfs.children<DeviceAttrs>(ADMIN_ACCESS, DEV_PATH).catch(() => []);
-  return children.filter((child) => child.node.type === 'device').map((child) => ({ name: child.name, ...(child.node.attrs.mac ? { mac: child.node.attrs.mac } : {}) }));
+  return children.filter((child) => child.node.type === 'device').map((child) => ({
+    name: child.name,
+    ...(child.node.attrs.mac ? { mac: child.node.attrs.mac } : {}),
+    ...(child.node.attrs.config?.found ? { found: child.node.attrs.config.found } : {}),
+  }));
 };
 
 /** The ids of the hosts no one wants as devices. */
@@ -61,4 +66,47 @@ export const readFound = async (cmd: Command): Promise<FoundAnswer | undefined> 
   if (!network) return undefined;
   const [devices, ignored] = await Promise.all([knownDevices(cmd), readIgnored(cmd)]);
   return foundDevices(network, devices, ignored);
+};
+
+/** One host the running bridge heard, by its id or address, with all it said; undefined when none is. */
+export const readFoundDetail = async (cmd: Command, id: string): Promise<FoundDetail | undefined> => {
+  const network = bridgeState()?.network;
+  const found = await readFound(cmd);
+  const device = found?.devices.find((each) => each.id === id || each.ip === id);
+  const host = device && network?.hosts.get(device.id);
+  return device && host ? { ...device, host } : undefined;
+};
+
+/**
+ * Makes `found` a device of a polled driver (`network`, `ipp`, `cast`) under /dev, named after its
+ * label, as the administrator, since /dev is theirs. It keeps the host's id, so it follows the host
+ * to a new address, and what the host offered that its driver asks on: a printer's IPP port and
+ * resource. Answers the device's name.
+ */
+export const addPolledDevice = async (cmd: Command, found: FoundDetail, driver: string): Promise<string> => {
+  const manager = cmd.sys.devices;
+  if (!manager) throw new Error('devices are not running here');
+  const base = deviceName(found.label) || deviceName(found.id) || 'device';
+  let name = base;
+  for (let n = 2; DEV_RESERVED_NAMES.includes(name) || await cmd.sys.vfs.exists(ADMIN_ACCESS, devicePath(name)); n++) name = `${base}-${n}`;
+  const ipp = found.host.mdns.find((each) => each.type === '_ipp._tcp');
+  const config: Record<string, string> = {
+    found: found.id,
+    ip: found.ip,
+    ...(driver === 'ipp' && ipp?.port ? { port: String(ipp.port) } : {}),
+    ...(driver === 'ipp' && ipp?.txt.rp ? { path: ipp.txt.rp } : {}),
+  };
+  const attrs: DeviceAttrs = {
+    label: found.label,
+    driver,
+    ...(found.class ? { class: found.class } : {}),
+    ...(found.vendor ? { manufacturer: found.vendor } : {}),
+    ...(found.model ? { model: found.model } : {}),
+    ...(found.firmware ? { firmware: found.firmware } : {}),
+    ...(found.mac ? { mac: found.mac } : {}),
+    config,
+  };
+  await manager.ensureDevice(ADMIN_ACCESS, name, attrs);
+  bridgeState()?.pollNow?.(name);
+  return name;
 };

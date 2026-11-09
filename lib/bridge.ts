@@ -2,9 +2,10 @@
  * The bridge: one MQTT connection, the sources listening on it, and the device writer they feed.
  * It connects, subscribes to what each source listens on and to every topic a source asked for
  * since, and hands each message to every source, except what the network listener says under
- * `ein/discovery/`, which it keeps as the hosts on the network `automation-found` names. When the connection is lost it connects again,
- * waiting 1 s, then twice as long each time up to a minute, so a broker that is away never ends
- * the service.
+ * `ein/discovery/`, which it keeps as the hosts on the network `automation-found` names. When the
+ * connection is lost it connects again, waiting 1 s, then twice as long each time up to a minute,
+ * so a broker that is away never ends the service. Beside the sources it runs the polled drivers
+ * (`network`, `ipp`, `cast`), which ask their devices on the network themselves.
  *
  * Each source is registered with core as the driver of the devices it finds, for as long as the
  * bridge runs. A value written to one of their controls (`echo on > /dev/hall-plug/switch-0`),
@@ -18,6 +19,8 @@ import type { Command, Driver, ModuleDevices } from '@ein/client';
 import { commandValue, type DeviceWriter } from './drivers.ts';
 import type { MqttConnect, MqttConnection, MqttMessage } from './mqtt.ts';
 import { NetworkHosts } from './network/found.ts';
+import type { PolledDriver } from './network/polled.ts';
+import { startPoller } from './network/poller.ts';
 import type { Publish, RunningSource, Update } from './sources/mod.ts';
 import { type BridgeState, setBridgeState } from './state.ts';
 
@@ -26,6 +29,8 @@ type BridgeOptions = {
   url: string;
   connect: MqttConnect;
   sources: RunningSource[];
+  /** The drivers that ask devices on the network themselves, run beside the sources. */
+  polled: PolledDriver[];
   devices: ModuleDevices;
   writer: DeviceWriter;
   /** Resolves when the bridge is to stop. */
@@ -51,7 +56,7 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
 
   const state: BridgeState = {
     url: options.url,
-    drivers: sources.map((source) => source.name),
+    drivers: [...sources.map((source) => source.name), ...options.polled.map((driver) => driver.name)],
     connected: false,
     since: Date.now(),
     messages: 0,
@@ -80,6 +85,8 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
     },
   });
   const unregister = sources.map((source) => options.devices.registerDriver(source.name, driverOf(source)));
+  const poller = startPoller({ cmd, devices: options.devices, writer, network, drivers: options.polled, log: (line) => log(line) });
+  state.pollNow = poller.pollNow;
 
   const handle = (update: Update, source: RunningSource) => {
     if (update.kind === 'subscribe') {
@@ -137,6 +144,7 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
   }
 
   for (const each of unregister) each();
+  poller.stop();
   await writer.close();
   setBridgeState(undefined);
   await log('stopped');

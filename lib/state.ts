@@ -20,6 +20,8 @@ export type BridgeState = {
   notes(): string[];
   /** What the network listener heard, on the same broker. */
   network: NetworkHosts;
+  /** Ask a device of a polled driver now; set once the poller runs. */
+  pollNow?(device: string): void;
 };
 
 let running: BridgeState | undefined;

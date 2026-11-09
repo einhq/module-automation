@@ -2,7 +2,7 @@
 /**
  * automation-bridge — the automation-bridge service: hears devices on the MQTT broker and drives
  * them as core's devices under /dev, one driver per source (ha-discovery, shelly), sending them what
- * is written to their controls.
+ * is written to their controls, and asks the devices of the polled drivers (network, ipp, cast).
  *
  * Off while CFG_AUTOMATION_MQTT_URL is empty: it says so and ends. Otherwise it runs until stopped,
  * connecting again whenever the broker goes away.
@@ -11,6 +11,7 @@
 import { type CmdReturn, type Command, serviceKey } from '@ein/client';
 import { runBridge } from '@automation/bridge';
 import { DeviceWriter } from '@automation/drivers';
+import { createPolledDrivers } from '@automation/network';
 import { connectMqtt } from '@automation/mqtt';
 import { createSources } from '@automation/sources';
 import { bridgeState } from '@automation/state';
@@ -52,7 +53,7 @@ const automationBridge = async (cmd: Command): CmdReturn => {
   });
   const password = await serviceKey(cmd, 'CFG_AUTOMATION_MQTT_KEY', 'CFG_AUTOMATION_MQTT_URL');
   const connect = connectMqtt({ url, clientId, username: cmd.env.CFG_AUTOMATION_MQTT_USER, password });
-  await runBridge({ cmd, url, connect, sources, devices, writer, stopped });
+  await runBridge({ cmd, url, connect, sources, polled: createPolledDrivers(fetch), devices, writer, stopped });
   return 0;
 };
 

@@ -160,3 +160,16 @@ export const shellyGen1Plug = {
   temperature: { topic: 'shellies/shellyplug-s-a1b2c3d4e5f6/temperature', payload: '27.90' },
   command: { topic: 'shellies/shellyplug-s-a1b2c3d4e5f6/relay/0/command', payload: 'off' },
 };
+
+/** An IPP response: success, and the printer attributes given, each value tagged as its type is. */
+export const ippResponse = (attributes: [number, string, (string | number)[]][]): Uint8Array<ArrayBuffer> => {
+  const bytes = [2, 0, 0, 0, 0, 0, 0, 1, 0x04];
+  for (const [tag, name, values] of attributes) {
+    values.forEach((value, index) => {
+      const key = index === 0 ? new TextEncoder().encode(name) : new Uint8Array();
+      const data = typeof value === 'number' ? [value >>> 24, (value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff] : [...new TextEncoder().encode(value)];
+      bytes.push(tag, key.length >> 8, key.length & 0xff, ...key, data.length >> 8, data.length & 0xff, ...data);
+    });
+  }
+  return new Uint8Array([...bytes, 0x03]);
+};

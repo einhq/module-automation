@@ -1,15 +1,16 @@
 #!ts
 /**
- * automation-adopt — make a Shelly found on the network a device: point its MQTT at the broker, with
- * the account devices sign in with, and restart it. The shelly or shelly-gen1 driver then hears it
- * as it comes back. For members of the devices group.
+ * automation-adopt — make something found on the network a device. For members of the devices group.
  *
- * The broker's address is CFG_AUTOMATION_DEVICE_BROKER, else what the network listener says it is.
+ * A Shelly is pointed at the broker (CFG_AUTOMATION_DEVICE_BROKER, else what the network listener
+ * says it is), with the account devices sign in with, and restarted: the shelly or shelly-gen1 driver
+ * hears it as it comes back. Anything else is a device under /dev at once, of the driver that asks it
+ * itself: ipp for a printer, cast for a Cast speaker, network for whether it answers.
  */
 
 import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags, serviceKey } from '@ein/client';
 import type { AdoptAnswer } from '@automation/api';
-import { adoptShelly, assertDevicesMember, readFound } from '@automation/network';
+import { addPolledDevice, adoptShelly, assertDevicesMember, readFound, readFoundDetail } from '@automation/network';
 
 const automationAdopt = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
@@ -29,6 +30,13 @@ const automationAdopt = async (cmd: Command): CmdReturn => {
     if (!host) return await fail(`nothing called ${id} was heard on the network (automation-found --all)`);
     if (host.device) return await fail(`${host.label} is the device ${host.device} already`);
     if (!host.adopt) return await fail(`${host.label} cannot be added from here${host.connect ? `: ${host.connect}` : ''}`);
+    if (host.adopt !== 'shelly' && host.adopt !== 'shelly-gen1') {
+      const device = await addPolledDevice(cmd, (await readFoundDetail(cmd, host.id))!, host.adopt);
+      const added: AdoptAnswer = { id: host.id, label: host.label, driver: host.adopt, restarted: false, device };
+      if (cmd.json) await cmd.writeJSON(added satisfies AdoptAnswer);
+      else await cmd.writeLn(`${host.label} is the device ${device} now`);
+      return 0;
+    }
     const address = (cmd.env.CFG_AUTOMATION_DEVICE_BROKER ?? '').trim() || found.broker;
     if (!address) return await fail('the address devices reach the broker at is not known: set CFG_AUTOMATION_DEVICE_BROKER');
     const user = (cmd.env.CFG_AUTOMATION_DEVICE_USER ?? '').trim() || undefined;
@@ -46,10 +54,11 @@ const automationAdopt = async (cmd: Command): CmdReturn => {
 automationAdopt.spec = {
   name: 'automation-adopt',
   effect: 'write' as const,
-  description: 'Make a Shelly found on the network a device: point its MQTT at the broker and restart it (for members of the devices group)',
+  description:
+    'Make something found on the network a device: a Shelly is pointed at the broker and restarted, a printer, a Cast speaker or anything else is added with a driver that asks it itself (for members of the devices group)',
   args: [{ name: 'id', type: 'string' as const, description: 'what automation-found calls it: its hardware address without colons, or its IP' }],
-  examples: ['automation-adopt a8032ab12345'],
-  returns: 'AdoptAnswer: id, label, driver, broker, restarted',
+  examples: ['automation-adopt a8032ab12345', 'automation-adopt 7c2ebd614055'],
+  returns: 'AdoptAnswer: id, label, driver, broker, restarted, device',
 };
 
 export default automationAdopt;

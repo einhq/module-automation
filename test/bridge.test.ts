@@ -9,8 +9,8 @@
 import { assertEquals, assertExists, assertStringIncludes } from '@std/assert';
 import type { DeviceHistory, DeviceInfo, DriverSummary } from '@ein/api';
 import { createTestContext, type ShellClient, testCommands } from '@ein/testing';
-import type { AutomationStatus, FoundAnswer, NetworkHost } from '@automation/api';
-import { esphomeConfigs, esphomeStates, shellyButton, shellyGen1Plug, shellyPlug } from './fixtures.ts';
+import type { AdoptAnswer, AutomationStatus, FoundAnswer, FoundDetail, NetworkHost } from '@automation/api';
+import { esphomeConfigs, esphomeStates, ippResponse, shellyButton, shellyGen1Plug, shellyPlug } from './fixtures.ts';
 import { startStubBroker } from './stub-broker.ts';
 
 /** Ask until `check` holds, or fail with what it last saw. */
@@ -53,12 +53,16 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
 
     await t.step('the bridge connects and registers a driver for each source', async () => {
       const status = await until('connected', () => admin.execJson<AutomationStatus>('automation-status'), (status) => status.connected);
-      assertEquals(status.drivers, ['ha-discovery', 'shelly', 'shelly-gen1']);
+      assertEquals(status.drivers, ['ha-discovery', 'shelly', 'shelly-gen1', 'network', 'ipp', 'cast']);
       const drivers = await anna.execJson<DriverSummary[]>('devices --drivers');
-      assertEquals(drivers.filter((driver) => driver.module === 'automation').map((driver) => [driver.name, driver.running]), [['ha-discovery', true], ['shelly', true], [
-        'shelly-gen1',
-        true,
-      ]]);
+      assertEquals(drivers.filter((driver) => driver.module === 'automation').map((driver) => [driver.name, driver.running]), [
+        ['cast', true],
+        ['ha-discovery', true],
+        ['ipp', true],
+        ['network', true],
+        ['shelly', true],
+        ['shelly-gen1', true],
+      ]);
     });
 
     await t.step('an ESPHome sensor becomes a device under /dev, its entities endpoints with their readings', async () => {
@@ -248,6 +252,67 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
     await t.step('a host the listener lets go is gone', async () => {
       broker.publish('ein/discovery/host/a8032ab12345', '', { retain: true });
       await until('gone', () => anna.execJson<FoundAnswer>('automation-found --all'), (found) => found.devices.length === 1);
+    });
+
+    await t.step('a host found on the network is added as a device that says whether it answers', async () => {
+      const listener = Deno.listen({ hostname: '127.0.0.1', port: 0 });
+      const port = (listener.addr as Deno.NetAddr).port;
+      try {
+        const nas: NetworkHost = {
+          ip: '127.0.0.1',
+          mac: '00:11:32:00:00:01',
+          names: ['backup-box.local'],
+          seen: new Date().toISOString(),
+          ssdp: [],
+          mdns: [{ type: '_smb._tcp', instance: 'Backup box', port, txt: {} }],
+        };
+        broker.publish('ein/discovery/host/001132000001', JSON.stringify(nas), { retain: true });
+        await until('heard', () => anna.execJson<FoundAnswer>('automation-found --all'), (found) => found.devices.some((each) => each.id === '001132000001'));
+        const added = await anna.execJson<AdoptAnswer>('automation-adopt 001132000001');
+        assertEquals([added.driver, added.device], ['network', 'backup-box']);
+        const info = await until('answering', () => anna.execJson<DeviceInfo>('device-show backup-box'), (info) => info.online === true);
+        assertEquals([info.driver, info.class, info.mac, info.endpointList.map((endpoint) => endpoint.name)], ['network', 'storage', '00:11:32:00:00:01', ['response-time']]);
+        const found = await anna.execJson<FoundAnswer>('automation-found --all');
+        assertEquals(found.devices.find((each) => each.id === '001132000001')?.device, 'backup-box');
+        const detail = await anna.execJson<FoundDetail>('automation-found 001132000001');
+        assertEquals(detail.host.mdns[0].instance, 'Backup box');
+      } finally {
+        listener.close();
+      }
+    });
+
+    await t.step('a printer is added over IPP: its state, warnings and ink', async () => {
+      const server = Deno.serve({ hostname: '127.0.0.1', port: 0, onListen: () => {} }, () =>
+        new Response(
+          ippResponse([
+            [0x23, 'printer-state', [3]],
+            [0x44, 'printer-state-reasons', ['marker-supply-low-warning']],
+            [0x42, 'marker-names', ['black cartridge', 'tri-color cartridge']],
+            [0x21, 'marker-levels', [64, -2]],
+          ]),
+          { headers: { 'content-type': 'application/ipp' } },
+        ));
+      try {
+        const printer: NetworkHost = {
+          ip: '127.0.0.1',
+          names: ['office-printer.local'],
+          seen: new Date().toISOString(),
+          ssdp: [],
+          mdns: [{ type: '_ipp._tcp', instance: 'Office printer', port: server.addr.port, txt: { rp: 'ipp/print', ty: 'Inkjet 7200' } }],
+        };
+        broker.publish('ein/discovery/host/office-printer', JSON.stringify(printer), { retain: true });
+        await until('heard', () => anna.execJson<FoundAnswer>('automation-found --all'), (found) => found.devices.some((each) => each.id === 'office-printer'));
+        assertEquals((await anna.execJson<AdoptAnswer>('automation-adopt office-printer')).device, 'office-printer');
+        const info = await until('read', () => anna.execJson<DeviceInfo>('device-show office-printer'), (info) => info.endpointList.filter((each) => each.last).length === 3);
+        assertEquals([info.driver, info.class, info.online], ['ipp', 'printer', true]);
+        assertEquals(info.endpointList.map((endpoint) => [endpoint.name, endpoint.last?.value]), [
+          ['black-cartridge', 64],
+          ['state', 'idle'],
+          ['warnings', 'marker-supply-low-warning'],
+        ]);
+      } finally {
+        await server.shutdown();
+      }
     });
   } finally {
     for (const client of clients) client.close();

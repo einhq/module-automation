@@ -13,9 +13,13 @@ broker on the host's own network (EiN's deployment runs it with the broker) asks
 what is there and publishes each address it heard as a retained message under
 `ein/discovery/host/<id>`, with its own `ein/discovery/status`. The bridge keeps those:
 `automation-found` names each one (a Shelly, ESPHome, a HomeKit or Matter accessory, a Hue bridge,
-a speaker, a printer, …) and says whether it is a device already, `automation-adopt` points a
-Shelly's MQTT at the broker and restarts it so its driver takes it, and `automation-ignore` leaves
-one out. The Devices page shows how many can be added, and opens them as a page of their own.
+a speaker, a printer, …), says whether it is a device already and, given one, shows all the
+listener heard of it. `automation-adopt` adds one: a Shelly's MQTT is pointed at the broker and it
+is restarted, so its driver takes it; anything else becomes a device of a driver that asks it
+itself, over the network: `ipp` for a printer (state, warnings, ink and toner), `cast` for a Google
+Cast speaker (what it plays; volume, mute, play, pause and stop), and `network` for the rest
+(whether it answers, and how fast). `automation-ignore` leaves one out. The Devices page shows how
+many can be added, and opens them as a page of their own.
 
 The devices, their pages and the device commands are EiN core's; this module brings the drivers and
 the rules.
