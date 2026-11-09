@@ -1,4 +1,15 @@
 {
+  "sidebar": [
+    {
+      "id": "automation.automations",
+      "section": "browse",
+      "label": "Automations",
+      "icon": "topology-star-3",
+      "to": "/automations",
+      "order": 46,
+      "group": "automation"
+    }
+  ],
   "panels": [
     {
       "id": "automation.found-devices",
