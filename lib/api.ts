@@ -28,6 +28,45 @@ export type AutomationStatus = {
   rules?: { count: number; runs: number; problems: string[] };
 };
 
+/** What an automation's messages carry: a device's reading, a word, a number. */
+export type AutomationValue = number | string | boolean | null;
+
+/** One node of an automation as its YAML says it: its kind, its settings, where it is and where it sends. */
+export type AutomationNodeSpec = {
+  type: string;
+  label?: string;
+  /** Its place on the canvas, `[x, y]`. */
+  pos?: [number, number];
+  /** The nodes it sends to: a list for its `out`, or a list per output (`true`, `false`, a switch's cases). */
+  to?: string[] | Record<string, string[]>;
+  [setting: string]: unknown;
+};
+
+/** An automation as its YAML says it. */
+export type AutomationSpec = {
+  description?: string;
+  /** False to keep it from running; an `enabled` attr on its file says so too, and wins. */
+  enabled?: boolean;
+  nodes: Record<string, AutomationNodeSpec>;
+};
+
+/** What is wrong with an automation, and in which node. */
+export type AutomationProblem = { node?: string; message: string };
+
+/** What one node of a running automation last did. */
+export type AutomationNodeStatus = {
+  /** What it last sent. */
+  value?: AutomationValue;
+  /** When. */
+  at?: string;
+  /** When it will send next by itself: a timer's end, a delay's, a held value's. */
+  due?: string;
+  /** Why it did not do what it should: an action that failed, a value it waits for. */
+  problem?: string;
+  /** Messages that came to it. */
+  messages: number;
+};
+
 /** `automation-rule-check`: a rule file as the rules service reads it, and what its conditions say now. */
 export type RuleCheck = {
   name: string;
