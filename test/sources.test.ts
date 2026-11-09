@@ -217,7 +217,7 @@ Deno.test('shelly: a colour light and a cover', async (t) => {
     assertEquals(of(updates, 'entity').map((entity) => [entity.entity, entity.entityKind, entity.settable, entity.max ?? '']), [
       ['rgbw-0', 'light', true, ''],
       ['rgbw-0-brightness', 'number', true, 100],
-      ['rgbw-0-color', 'text', true, ''],
+      ['rgbw-0-color', 'color', true, ''],
       ['rgbw-0-white', 'number', true, 255],
       ['rgbw-0-power', 'sensor', false, ''],
     ]);
@@ -271,7 +271,7 @@ Deno.test('shelly-gen1: a colour light and a roller', async (t) => {
     const updates = source.decode(light.status.topic, light.status.payload, true);
     assertEquals(of(updates, 'entity').map((entity) => [entity.entity, entity.entityKind, entity.settable]), [
       ['color-0-brightness', 'number', true],
-      ['color-0-color', 'text', true],
+      ['color-0-color', 'color', true],
       ['color-0-white', 'number', true],
       ['color-0-color-temperature', 'number', true],
     ]);

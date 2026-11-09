@@ -10,7 +10,7 @@ import { assertEquals, assertExists, assertStringIncludes } from '@std/assert';
 import type { DeviceHistory, DeviceInfo, DriverSummary } from '@ein/api';
 import { createTestContext, type ShellClient, testCommands } from '@ein/testing';
 import type { AdoptAnswer, AutomationStatus, FoundAnswer, FoundDetail, NetworkHost } from '@automation/api';
-import { esphomeConfigs, esphomeStates, ippResponse, shellyButton, shellyGen1Plug, shellyPlug } from './fixtures.ts';
+import { esphomeConfigs, esphomeStates, ippResponse, shellyButton, shellyColorLight, shellyGen1Plug, shellyPlug } from './fixtures.ts';
 import { startStubBroker } from './stub-broker.ts';
 
 /** Ask until `check` holds, or fail with what it last saw. */
@@ -163,6 +163,20 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
       );
     });
 
+    await t.step("a colour light's colour is a colour control, written as #rrggbb however it was given", async () => {
+      broker.publish(shellyColorLight.status.topic, shellyColorLight.status.payload);
+      const info = await until(
+        'desk-lamp colour',
+        () => anna.execJson<DeviceInfo>('device-show desk-lamp').catch(() => undefined),
+        (info) => info?.endpointList.some((endpoint) => endpoint.name === 'rgbw-0-color' && endpoint.last?.value === '#ff8000') ?? false,
+      );
+      assertEquals(info!.endpointList.find((endpoint) => endpoint.name === 'rgbw-0-color')?.schema, { type: 'color' });
+      await anna.execString('echo 0,255,127 > /dev/desk-lamp/rgbw-0-color');
+      const calls = broker.published.filter((message) => message.topic === 'desk-lamp/rpc').map((message) => JSON.parse(message.payload));
+      assertEquals(calls.find((call) => call.method === 'RGBW.Set')?.params, { id: 0, rgb: [0, 255, 127] });
+      assertEquals((await anna.exec('echo orange > /dev/desk-lamp/rgbw-0-color')).success, false);
+    });
+
     await t.step('a value the control does not take, and a reading, are refused', async () => {
       assertEquals((await anna.exec('echo dim > /dev/hall-plug/switch-0')).success, false);
       assertEquals((await bo.exec('echo 20 > /dev/hall-sensor/temperature')).success, false);
@@ -198,9 +212,9 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
     await t.step('the status counts the devices its drivers drive', async () => {
       const status = await admin.execJson<AutomationStatus>('automation-status');
       assertExists(status.since);
-      assertEquals([status.connected, status.devices, status.endpoints], [true, 2, 7]);
+      assertEquals([status.connected, status.devices, status.endpoints], [true, 3, 12]);
       assertEquals(status.messages > 10, true);
-      assertStringIncludes(await admin.execString('JSON_OUTPUT=0 automation-status --brief'), '2 devices, 7 endpoints');
+      assertStringIncludes(await admin.execString('JSON_OUTPUT=0 automation-status --brief'), '3 devices, 12 endpoints');
     });
 
     await t.step('a first generation plug heard by its power before its relay is a plug all the same', async () => {

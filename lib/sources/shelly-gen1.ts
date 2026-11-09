@@ -111,7 +111,7 @@ const lightReadings = (part: string, light: string): Found[] => [
     entity: `${light}-color`,
     reading: {
       label: labelOf(`${light} colour`),
-      entityKind: 'text',
+      entityKind: 'color',
       settable: true,
       value: (p) => {
         const status = parse(p);

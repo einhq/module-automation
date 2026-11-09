@@ -33,7 +33,7 @@ type Step =
 type HttpReading = { name: string; label: string; path: Step[]; unit?: string };
 
 /** One control a person named: its endpoint, the address that sets it, and how on and off are spelled. */
-export type HttpControl = { name: string; label: string; address: string; on?: string; off?: string };
+type HttpControl = { name: string; label: string; address: string; on?: string; off?: string };
 
 const DEFAULT_INTERVAL_MS = 300_000;
 const MIN_INTERVAL_MS = 10_000;

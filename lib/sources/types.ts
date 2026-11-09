@@ -18,10 +18,11 @@ import type { DeviceValue, EndpointCategory } from '@ein/api';
  * - `light` — a switch that is a light
  * - `number` — a number that can be set
  * - `text` — a word that can be chosen, from `options` when there are some
+ * - `color` — a colour that can be set, as `#rrggbb`
  * - `button` — a physical button: its presses are events, not a state
  * - `action` — something that can be done, with no state: a restart, a doorbell's chime
  */
-export type EntityKind = 'sensor' | 'binary' | 'switch' | 'light' | 'number' | 'text' | 'button' | 'action';
+export type EntityKind = 'sensor' | 'binary' | 'switch' | 'light' | 'number' | 'text' | 'color' | 'button' | 'action';
 
 /** A device was announced, or said more about itself. */
 export type DeviceUpdate = {

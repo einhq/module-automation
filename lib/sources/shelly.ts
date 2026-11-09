@@ -79,7 +79,7 @@ const light = (method: string): Field[] => [
 const color = (method: string): Field => ({
   suffix: '-color',
   path: ['rgb'],
-  kind: 'text',
+  kind: 'color',
   label: 'colour',
   read: (raw) => Array.isArray(raw) ? hexOf(raw[0], raw[1], raw[2]) : undefined,
   set: setting(method, 'rgb', rgbOf),
