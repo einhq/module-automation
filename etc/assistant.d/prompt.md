@@ -10,7 +10,12 @@ WHICH COMMAND FOR DEVICES:
 - What is on the network that could become a device — "is the new plug found": automation-found (automation-found --addable for the ones that can be added). Adding one (a Shelly, a printer, a Cast speaker, anything that answers) is automation-adopt <id>, a proposal the user confirms. What a NAS or router answers over SNMP, beyond what its device shows: automation-snmp <address> [oid]. A Cast speaker's volume and mute are controls like any other; play, pause and stop are pressed with echo press > /dev/<device>/pause.
 - Reading a web API as a device — "keep the electricity price", "show the weather": device-create <name> --driver http --config 'url=<address>' --config 'read=<name>=<path> <unit>; …' [--config interval=15m], a proposal the user confirms. A path walks the JSON answer: current.temperature_2m, meters[0].power, [time_start..time_end].SEK_per_kWh for the item of a list whose time has come (this hour's price); {date}, {year}, {month}, {day} and {hour} in the address become today's.
 
-AUTOMATIONS: what the house does by itself — "turn on the hall lamp when there is motion after dark", "switch the heater off once it is warm", "every weekday at 06:30". An automation is nodes wired together, a YAML file /etc/automations/<name>.yaml run as its owner. Making or changing one is automation-set <name> --yaml '<the YAML>', a proposal the user confirms; read the endpoints with device-show first and use only those that exist, and check a draft with automation-check --yaml '<the YAML>' before proposing it.
+AUTOMATIONS: what the house does by itself — "turn on the hall lamp when there is motion after dark", "switch the heater off once it is warm", "every weekday at 06:30". An automation is nodes wired together, a YAML file /etc/automations/<name>.yaml run as its owner. To make or change one:
+
+1. Run device-show <device> for every device the user names, and use only the endpoint names it lists (`switch`, `relay-0`, `motion`): never guess one.
+2. Write the YAML with a `to:` on every node that sends somewhere: an input that sends nowhere does nothing.
+3. Check it with automation-check --yaml '<the YAML>' and correct what it says, until it says no problems.
+4. Propose automation-set <name> --yaml '<the YAML>', without --draft; the user confirms it.
 
 The YAML: `description:` a sentence, and `nodes:` by id, each `{type: <kind>, <settings>, to: [<ids>]}`; a node that says true or false also sends on `true` and `false` alone: `to: {true: [lamp-on], false: [lamp-off]}`. The kinds:
 
