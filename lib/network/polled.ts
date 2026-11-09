@@ -5,8 +5,8 @@
  * - `network`: any host; whether it answers, and how fast (a TCP connection to one of its ports,
  *   which a refusal answers as well as an accept);
  * - `ipp`: a printer; its state, warnings and the level of each ink or toner (IPP);
- * - `cast`: a Google Cast device; the app running, what it plays, its volume and mute, which can be
- *   set, and play, pause and stop.
+ * - `cast`: a Google Cast device; whether it plays and what (title, artist and app as one line), its
+ *   volume and mute, which can be set, and play, pause and stop.
  *
  * Each poll says what the device is as the sources do (`DeviceChange`s), which the device writer
  * makes endpoints of; a device that does not answer is offline.
@@ -135,16 +135,13 @@ const cast: PolledDriver = {
       entity(device.name, 'volume', { entityKind: 'number', unit: '%', min: 0, max: 100, step: 1, settable: true }),
       entity(device.name, 'muted', { entityKind: 'switch', settable: true }),
       entity(device.name, 'player', { entityKind: 'sensor', label: 'player' }),
-      entity(device.name, 'title', { entityKind: 'sensor' }),
-      entity(device.name, 'artist', { entityKind: 'sensor' }),
-      entity(device.name, 'app', { entityKind: 'sensor' }),
+      entity(device.name, 'playing', { entityKind: 'sensor', label: 'playing' }),
       ...CAST_ACTIONS.map((action) => entity(device.name, action, { entityKind: 'action', settable: true })),
     ];
+    const what = [status.title, status.artist].filter(Boolean).join(' – ');
     const values: Record<string, DeviceValue> = {
       player: (status.player ?? 'IDLE').toLowerCase(),
-      title: status.title || null,
-      artist: status.artist || null,
-      app: status.app || null,
+      playing: what && status.app ? `${what} (${status.app})` : what || status.app || null,
     };
     if (status.volume !== undefined) values.volume = Math.round(status.volume * 100);
     if (status.muted !== undefined) values.muted = status.muted;

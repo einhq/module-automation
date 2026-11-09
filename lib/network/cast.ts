@@ -28,8 +28,6 @@ type CastStatus = {
   muted?: boolean;
   /** The app running, by its name (`Spotify`, `Backdrop` when idle). */
   app?: string;
-  /** What the app says it does (`Casting: …`). */
-  status?: string;
   /** `PLAYING`, `PAUSED`, `BUFFERING` or `IDLE`, while an app plays media. */
   player?: string;
   title?: string;
@@ -164,7 +162,7 @@ const open = (ip: string): Promise<Session> =>
     });
   });
 
-type Application = { appId?: string; displayName?: string; statusText?: string; sessionId?: string; transportId?: string; isIdleScreen?: boolean };
+type Application = { appId?: string; displayName?: string; sessionId?: string; transportId?: string; isIdleScreen?: boolean };
 type ReceiverStatus = { volume?: { level?: number; muted?: boolean }; applications?: Application[] };
 type MediaStatus = { mediaSessionId?: number; playerState?: string; media?: { metadata?: { title?: string; artist?: string; albumArtist?: string } } };
 
@@ -193,7 +191,6 @@ export const castStatus = async (ip: string): Promise<CastStatus> => {
       ...(receiver.volume?.level !== undefined ? { volume: receiver.volume.level } : {}),
       ...(receiver.volume?.muted !== undefined ? { muted: receiver.volume.muted } : {}),
       app: app?.displayName ?? '',
-      status: app?.statusText ?? '',
     };
     const playing = mediaApp(receiver);
     const media = playing ? await mediaStatus(session, playing).catch(() => undefined) : undefined;
