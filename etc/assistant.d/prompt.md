@@ -15,7 +15,7 @@ AUTOMATIONS: what the house does by itself — "turn on the hall lamp when there
 1. Run device-show <device> for every device the user names, and use only the endpoint names it lists (`switch`, `relay-0`, `motion`): never guess one.
 2. Write the YAML with a `to:` on every node that sends somewhere: an input that sends nowhere does nothing.
 3. Check it with automation-check --yaml '<the YAML>' and correct what it says, until it says no problems.
-4. Propose automation-set <name> --yaml '<the YAML>', without --draft; the user confirms it.
+4. Propose automation-set <name> --yaml '<the YAML>', without --draft; the user confirms it. Never write the file with cat or echo: automation-set checks it and makes it its owner's alone, which the engine needs to run it.
 
 The YAML: `description:` a sentence, and `nodes:` by id, each `{type: <kind>, <settings>, to: [<ids>]}`; a node that says true or false also sends on `true` and `false` alone: `to: {true: [lamp-on], false: [lamp-off]}`. The kinds:
 
