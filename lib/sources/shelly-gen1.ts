@@ -1,25 +1,33 @@
 /**
- * Shelly's first generation (Plug S, 1, 1PM, 2.5, i3, …), over MQTT. With MQTT on, which a Shelly of
- * this generation takes at its next restart, a device says, under `shellies/<id>` with its id
- * `<model>-<mac>` (`shellyplug-s-a1b2c3d4e5f6`):
+ * Shelly's first generation (Plug S, 1, 1PM, 2.5, i3, Dimmer, Bulb, RGBW2, …), over MQTT. With MQTT
+ * on, which a Shelly of this generation takes at its next restart, a device says, under
+ * `shellies/<id>` with its id `<model>-<mac>` (`shellyplug-s-a1b2c3d4e5f6`):
  *
  *   shellies/<id>/announce, shellies/announce   what it is ({id, model, mac, fw_ver}), on connecting
  *   shellies/<id>/online                         true, or false as its last will
  *   shellies/<id>/relay/<n>                      on or off
  *   shellies/<id>/relay/<n>/power                the power drawn, W
  *   shellies/<id>/relay/<n>/energy               the energy drawn since it last started, watt-minutes
+ *   shellies/<id>/light/<n>                      a light, on or off (also color/<n> and white/<n>)
+ *   shellies/<id>/light/<n>/status               its brightness, colour and temperature, as JSON
+ *   shellies/<id>/roller/<n>                     a roller's state: open, close or stop
+ *   shellies/<id>/roller/<n>/pos                 where it is, 0–100 %, or -1 when it does not know
  *   shellies/<id>/temperature                    its own temperature, °C
  *   shellies/<id>/input_event/<n>                a button's press ({"event": "S"}: S, SS, SSS, L, SL, LS)
  *
- * and takes `on` and `off` on `shellies/<id>/relay/<n>/command`. A device heard before it announced
- * itself is asked to (`shellies/<id>/command` `announce`), which a bridge that started after it did
- * needs, since a device announces only when it connects.
+ * and takes `on` and `off` on `relay/<n>/command` and `light/<n>/command`, a light's brightness,
+ * colour and temperature as JSON on `light/<n>/set`, and `open`, `close`, `stop` on
+ * `roller/<n>/command` and a position on `roller/<n>/command/pos`. A device heard before it
+ * announced itself is asked to (`shellies/<id>/command` `announce`), which a bridge that started
+ * after it did needs, since a device announces only when it connects.
  *
  * The device is named by its id; an entity by what it is: `relay-0`, `relay-0-power`,
- * `relay-0-energy`, `temperature`, `input-0`.
+ * `relay-0-energy`, `light-0`, `light-0-brightness`, `color-0-color`, `roller-0-position`,
+ * `roller-0-open`, `temperature`, `input-0`.
  */
 
 import { deviceName, type DeviceValue } from '@ein/api';
+import { hexOf, rgbOf } from './color.ts';
 import { labelOf } from './label.ts';
 import type { EntityUpdate, MqttSource, Publish, Update } from './types.ts';
 
@@ -36,6 +44,11 @@ const MODELS: Record<string, string> = {
   'SHIX3-1': 'i3',
   'SHDM-1': 'Dimmer',
   'SHDM-2': 'Dimmer 2',
+  'SHBLB-1': 'Bulb',
+  'SHCB-1': 'Duo RGBW',
+  'SHBDUO-1': 'Duo',
+  'SHVIN-1': 'Vintage',
+  'SHRGBW2': 'RGBW2',
   'SHEM': 'EM',
 };
 
@@ -44,34 +57,88 @@ const PRESSES: Record<string, string> = { S: 'single', SS: 'double', SSS: 'tripl
 
 const WATT_MINUTES_PER_WH = 60;
 
-type Reading = Omit<EntityUpdate, 'kind' | 'device' | 'entity' | 'settable' | 'supported'> & { settable?: boolean; value: (payload: string) => DeviceValue | undefined };
+type Reading = Omit<EntityUpdate, 'kind' | 'device' | 'entity' | 'settable' | 'supported'> & {
+  settable?: boolean;
+  /** Its state from the payload; none for an action, which has no state. */
+  value?: (payload: string) => DeviceValue | undefined;
+};
+
+type Found = { entity: string; reading: Reading };
 
 const number = (payload: string): number | undefined => {
   const value = Number(payload.trim());
   return payload.trim() !== '' && Number.isFinite(value) ? value : undefined;
 };
 
+const onOff = (payload: string): boolean | undefined => payload.trim() === 'on' ? true : payload.trim() === 'off' ? false : undefined;
+
+/** A field of a JSON status, when it is a number. */
+const field = (name: string) => (payload: string): number | undefined => {
+  const value = parse(payload)?.[name];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+};
+
+/** The parts of a light that say what they are: `light` (Dimmer, Bulb Duo, Duo RGBW), `color` and `white` (Bulb, RGBW2). */
+const LIGHTS = new Set(['light', 'color', 'white']);
+
+/** A light's brightness, which a light in colour mode calls its gain. */
+const brightnessOf = (status: Record<string, unknown>, part: string): unknown => part === 'color' || status.mode === 'color' ? status.gain : status.brightness ?? status.gain;
+
+/** What a light's JSON status (`light/0/status`, `color/0/status`) holds, each with what it reads. */
+const lightReadings = (part: string, light: string): Found[] => [
+  {
+    entity: `${light}-brightness`,
+    reading: {
+      label: labelOf(`${light} brightness`),
+      entityKind: 'number',
+      unit: '%',
+      min: 0,
+      max: 100,
+      step: 1,
+      settable: true,
+      value: (p) => {
+        const status = parse(p);
+        const value = status ? brightnessOf(status, part) : undefined;
+        return typeof value === 'number' ? value : undefined;
+      },
+    },
+  },
+  {
+    entity: `${light}-color`,
+    reading: {
+      label: labelOf(`${light} colour`),
+      entityKind: 'text',
+      settable: true,
+      value: (p) => {
+        const status = parse(p);
+        return status ? hexOf(status.red, status.green, status.blue) : undefined;
+      },
+    },
+  },
+  ...(part === 'color'
+    ? [{
+      entity: `${light}-white`,
+      reading: { label: labelOf(`${light} white`), entityKind: 'number' as const, min: 0, max: 255, step: 1, settable: true, value: field('white') },
+    }]
+    : []),
+  {
+    entity: `${light}-color-temperature`,
+    reading: { label: labelOf(`${light} colour temperature`), entityKind: 'number', unit: 'K', step: 1, settable: true, value: field('temp') },
+  },
+];
+
 /** What each topic under `shellies/<id>/` is, by its path there: `relay/0/power` → the relay's power. */
-const readingOf = (rest: string[]): { entity: string; reading: Reading } | undefined => {
+const readingsOf = (rest: string[]): Found[] => {
   if (rest[0] === 'relay' && /^\d+$/.test(rest[1] ?? '')) {
     const relay = `relay-${rest[1]}`;
     if (rest.length === 2) {
-      return {
-        entity: relay,
-        reading: {
-          label: labelOf(relay),
-          entityKind: 'switch',
-          deviceClass: 'outlet',
-          settable: true,
-          value: (p) => p.trim() === 'on' ? true : p.trim() === 'off' ? false : undefined,
-        },
-      };
+      return [{ entity: relay, reading: { label: labelOf(relay), entityKind: 'switch', deviceClass: 'outlet', settable: true, value: onOff } }];
     }
     if (rest.length === 3 && rest[2] === 'power') {
-      return { entity: `${relay}-power`, reading: { label: labelOf(`${relay} power`), entityKind: 'sensor', unit: 'W', deviceClass: 'power', value: number } };
+      return [{ entity: `${relay}-power`, reading: { label: labelOf(`${relay} power`), entityKind: 'sensor', unit: 'W', deviceClass: 'power', value: number } }];
     }
     if (rest.length === 3 && rest[2] === 'energy') {
-      return {
+      return [{
         entity: `${relay}-energy`,
         reading: {
           label: labelOf(`${relay} energy since start`),
@@ -83,14 +150,80 @@ const readingOf = (rest: string[]): { entity: string; reading: Reading } | undef
             return minutes === undefined ? undefined : Math.round(minutes / WATT_MINUTES_PER_WH * 100) / 100;
           },
         },
-      };
+      }];
     }
-    return undefined;
+    return [];
+  }
+  if (LIGHTS.has(rest[0]) && /^\d+$/.test(rest[1] ?? '')) {
+    const light = `${rest[0]}-${rest[1]}`;
+    if (rest.length === 2) return [{ entity: light, reading: { label: labelOf(light), entityKind: 'light', settable: true, value: onOff } }];
+    if (rest.length === 3 && rest[2] === 'status') return lightReadings(rest[0], light);
+    return [];
+  }
+  if (rest[0] === 'roller' && /^\d+$/.test(rest[1] ?? '')) {
+    const roller = `roller-${rest[1]}`;
+    if (rest.length === 2) {
+      const action = (move: string): Found => ({ entity: `${roller}-${move}`, reading: { label: labelOf(`${roller} ${move}`), entityKind: 'action', settable: true } });
+      return [
+        { entity: `${roller}-state`, reading: { label: labelOf(`${roller} state`), entityKind: 'sensor', value: (p) => p.trim() || undefined } },
+        action('open'),
+        action('close'),
+        action('stop'),
+      ];
+    }
+    if (rest.length === 3 && rest[2] === 'pos') {
+      return [{
+        entity: `${roller}-position`,
+        reading: {
+          label: labelOf(`${roller} position`),
+          entityKind: 'number',
+          unit: '%',
+          min: 0,
+          max: 100,
+          step: 1,
+          settable: true,
+          // An uncalibrated roller says -1: it does not know where it is.
+          value: (p) => {
+            const position = number(p);
+            return position === undefined ? undefined : position < 0 ? null : position;
+          },
+        },
+      }];
+    }
+    return [];
   }
   if (rest.length === 1 && rest[0] === 'temperature') {
-    return { entity: 'temperature', reading: { label: 'Temperature', entityKind: 'sensor', unit: '°C', deviceClass: 'temperature', category: 'diagnostic', value: number } };
+    return [{ entity: 'temperature', reading: { label: 'Temperature', entityKind: 'sensor', unit: '°C', deviceClass: 'temperature', category: 'diagnostic', value: number } }];
   }
-  return undefined;
+  return [];
+};
+
+/** What to send for a command to one entity of the device with this id, by the entity's name. */
+const commandOf = (id: string, entity: string, value: string, mode: string | undefined): Publish | undefined => {
+  const base = `shellies/${id}`;
+  const relay = /^relay-(\d+)$/.exec(entity);
+  if (relay) return value === 'on' || value === 'off' ? { topic: `${base}/relay/${relay[1]}/command`, payload: value } : undefined;
+  const roller = /^roller-(\d+)-(position|open|close|stop)$/.exec(entity);
+  if (roller) {
+    if (roller[2] !== 'position') return { topic: `${base}/roller/${roller[1]}/command`, payload: roller[2] };
+    const position = number(value);
+    return position === undefined ? undefined : { topic: `${base}/roller/${roller[1]}/command/pos`, payload: String(Math.round(position)) };
+  }
+  const light = /^(light|color|white)-(\d+)(?:-(brightness|color|white|color-temperature))?$/.exec(entity);
+  if (!light) return undefined;
+  const [, part, index, what] = light;
+  if (!what) return value === 'on' || value === 'off' ? { topic: `${base}/${part}/${index}/command`, payload: value } : undefined;
+  const set = (params: Record<string, unknown>): Publish => ({ topic: `${base}/${part}/${index}/set`, payload: JSON.stringify(params) });
+  if (what === 'color') {
+    const rgb = rgbOf(value);
+    if (!rgb) return undefined;
+    // A Duo RGBW's light is in colour mode or white; a colour is set in colour mode.
+    return set({ ...(part === 'light' ? { mode: 'color' } : {}), red: rgb[0], green: rgb[1], blue: rgb[2] });
+  }
+  const amount = number(value);
+  if (amount === undefined) return undefined;
+  if (what === 'brightness') return set(part === 'color' || mode === 'color' ? { gain: amount } : { brightness: amount });
+  return set(what === 'white' ? { white: amount } : { temp: amount });
 };
 
 /** The JSON object in a payload, or undefined. */
@@ -110,6 +243,8 @@ export const createShellyGen1 = (): MqttSource => {
   const announced = new Set<string>();
   /** Entities announced, by `<device>/<entity>`. */
   const entities = new Set<string>();
+  /** The mode each light last said it is in (`color`, `white`), by `<id>/<light>`. */
+  const modes = new Map<string, string>();
 
   /** The device of an id, made with what is known of it so far, and asked what it is if it has not said. */
   const deviceOf = (id: string, updates: Update[]): string => {
@@ -149,13 +284,25 @@ export const createShellyGen1 = (): MqttSource => {
 
   return {
     name: 'shelly-gen1',
-    description: "Shelly's first generation (Plug S, 1, 1PM, 2.5, i3, …), over MQTT",
-    topics: () => ['shellies/announce', 'shellies/+/announce', 'shellies/+/online', 'shellies/+/relay/#', 'shellies/+/temperature', 'shellies/+/input_event/+'],
+    description: "Shelly's first generation (Plug S, 1, 1PM, 2.5, i3, Dimmer, Bulb, RGBW2, …), over MQTT",
+    topics: () => [
+      'shellies/announce',
+      'shellies/+/announce',
+      'shellies/+/online',
+      'shellies/+/relay/#',
+      'shellies/+/light/#',
+      'shellies/+/color/#',
+      'shellies/+/white/#',
+      'shellies/+/roller/#',
+      'shellies/+/temperature',
+      'shellies/+/input_event/+',
+    ],
     forget(device) {
       for (const [id, name] of devices) {
         if (name !== device) continue;
         devices.delete(id);
         announced.delete(id);
+        for (const key of [...modes.keys()]) if (key.startsWith(`${id}/`)) modes.delete(key);
       }
       for (const key of [...entities]) if (key.startsWith(`${device}/`)) entities.delete(key);
       return [];
@@ -195,24 +342,27 @@ export const createShellyGen1 = (): MqttSource => {
         if (!retained) updates.push({ kind: 'event', device, entity, value: PRESSES[event] ?? event.toLowerCase() });
         return updates;
       }
-      const found = readingOf(rest);
-      if (!found) return [];
-      const value = found.reading.value(payload);
-      if (value === undefined) return [];
+      const readings = readingsOf(rest).map((found) => ({ ...found, value: found.reading.value?.(payload) }))
+        .filter((found) => found.value !== undefined || !found.reading.value);
+      if (!readings.some((found) => found.value !== undefined)) return [];
+      if (rest[2] === 'status' && typeof parse(payload)?.mode === 'string') modes.set(`${id}/${rest[0]}-${rest[1]}`, parse(payload)!.mode as string);
       const updates: Update[] = [];
       const device = deviceOf(id, updates);
-      if (!entities.has(`${device}/${found.entity}`)) {
-        entities.add(`${device}/${found.entity}`);
-        const { value: _value, settable, ...about } = found.reading;
-        updates.push({ kind: 'entity', device, entity: found.entity, ...about, settable: settable === true, supported: true });
+      for (const found of readings) {
+        if (!entities.has(`${device}/${found.entity}`)) {
+          entities.add(`${device}/${found.entity}`);
+          const { value: _value, settable, ...about } = found.reading;
+          updates.push({ kind: 'entity', device, entity: found.entity, ...about, settable: settable === true, supported: true });
+        }
+        if (found.value !== undefined) updates.push({ kind: 'state', device, entity: found.entity, value: found.value, retained });
       }
-      return [...updates, { kind: 'state', device, entity: found.entity, value, retained }];
+      return updates;
     },
     encode({ device, entity, value }) {
       const id = [...devices].find(([, name]) => name === device)?.[0];
-      const match = /^relay-(\d+)$/.exec(entity);
-      if (!id || !match || (value !== 'on' && value !== 'off')) return undefined;
-      return [{ topic: `shellies/${id}/relay/${match[1]}/command`, payload: value } satisfies Publish];
+      const light = /^((?:light|color|white)-\d+)/.exec(entity)?.[1];
+      const publish = id ? commandOf(id, entity, value, light ? modes.get(`${id}/${light}`) : undefined) : undefined;
+      return publish ? [publish] : undefined;
     },
   };
 };

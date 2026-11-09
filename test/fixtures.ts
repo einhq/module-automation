@@ -164,6 +164,37 @@ export const shellyGen1Plug = {
   command: { topic: 'shellies/shellyplug-s-a1b2c3d4e5f6/relay/0/command', payload: 'off' },
 };
 
+/** A second generation colour light (`rgbw:0`) and a cover (`cover:0`), as their status says them. */
+export const shellyColorLight = {
+  status: {
+    topic: 'desk-lamp/status/rgbw:0',
+    payload: JSON.stringify({ id: 0, source: 'init', output: true, brightness: 40, rgb: [255, 128, 0], white: 10, apower: 6.1 }),
+  },
+};
+
+export const shellyCover = {
+  status: {
+    topic: 'kitchen-blind/status/cover:0',
+    payload: JSON.stringify({ id: 0, source: 'init', state: 'stopped', apower: 0, current_pos: 30, pos_control: true }),
+  },
+};
+
+/** A first generation Duo RGBW in colour mode and a 2.5 in roller mode, with invented ids. */
+export const shellyGen1Light = {
+  id: 'shellycolorbulb-a1b2c3d4e5f7',
+  light: { topic: 'shellies/shellycolorbulb-a1b2c3d4e5f7/light/0', payload: 'on' },
+  status: {
+    topic: 'shellies/shellycolorbulb-a1b2c3d4e5f7/light/0/status',
+    payload: JSON.stringify({ ison: true, mode: 'color', red: 0, green: 128, blue: 255, white: 0, gain: 70, brightness: 30, temp: 4750, effect: 0 }),
+  },
+};
+
+export const shellyGen1Roller = {
+  id: 'shellyswitch25-a1b2c3d4e5f8',
+  state: { topic: 'shellies/shellyswitch25-a1b2c3d4e5f8/roller/0', payload: 'stop' },
+  position: { topic: 'shellies/shellyswitch25-a1b2c3d4e5f8/roller/0/pos', payload: '-1' },
+};
+
 /** An IPP response: success, and the printer attributes given, each value tagged as its type is. */
 export const ippResponse = (attributes: [number, string, (string | number)[]][]): Uint8Array<ArrayBuffer> => {
   const bytes = [2, 0, 0, 0, 0, 0, 0, 1, 0x04];

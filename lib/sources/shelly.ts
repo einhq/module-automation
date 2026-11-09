@@ -12,24 +12,53 @@
  * (`Shelly.GetDeviceInfo`) and for its whole status (`Shelly.GetStatus`).
  *
  * The device is named by its prefix, an entity by its component and field: `switch-0` (the relay),
- * `switch-0-power`, `input-0`, `temperature-0`.
+ * `switch-0-power`, `light-0-brightness`, `rgb-0-color`, `cover-0-position`, `cover-0-open`,
+ * `input-0`, `temperature-0`. What can be set is set with the component's own call: `Switch.Set`,
+ * `Light.Set` (`RGB`, `RGBW`, `CCT`), `Cover.GoToPosition`, `Cover.Open`, `Cover.Close`, `Cover.Stop`.
  */
 
 import { deviceName, type DeviceValue } from '@ein/api';
+import { hexOf, rgbOf } from './color.ts';
 import { labelOf } from './label.ts';
 import type { EntityKind, MqttSource, Publish, Update } from './types.ts';
+
+/** What a command to an entity calls on the device: `Light.Set` with `{id, brightness}`. */
+type Call = { method: string; params: Json };
 
 /** One field of a component's status that is an entity. */
 type Field = {
   /** Appended to the component's name: `switch-0` + `-power`. Empty for the component itself. */
   suffix: string;
+  /** Where in the status it is; empty for an action, which has no state. */
   path: string[];
   kind: EntityKind;
   unit?: string;
   deviceClass?: string;
   label?: string;
+  min?: number;
+  max?: number;
+  step?: number;
   /** Tells of the device itself, not of the house. */
   diagnostic?: true;
+  /** Its state from what is at `path`, when that is not the state itself. */
+  read?: (raw: unknown) => DeviceValue | undefined;
+  /** The call that sets it, given the component's index and the command's value; it is settable when there is one. */
+  set?: (id: number, value: string) => Call | undefined;
+};
+
+type Json = Record<string, unknown>;
+
+const onOff = (value: string): boolean | undefined => value === 'on' ? true : value === 'off' ? false : undefined;
+
+const numberOf = (value: string): number | undefined => {
+  const number = Number(value.trim());
+  return value.trim() !== '' && Number.isFinite(number) ? number : undefined;
+};
+
+/** A call of `method` with the command's value, read by `parse`, as its parameter `param`. */
+const setting = (method: string, param: string, parse: (value: string) => unknown) => (id: number, value: string): Call | undefined => {
+  const parsed = parse(value);
+  return parsed === undefined ? undefined : { method, params: { id, [param]: parsed } };
 };
 
 const POWER: Field[] = [
@@ -40,18 +69,58 @@ const POWER: Field[] = [
   { suffix: '-temperature', path: ['temperature', 'tC'], kind: 'sensor', unit: '°C', deviceClass: 'temperature', label: 'temperature', diagnostic: true },
 ];
 
+/** A light of one of the kinds Shelly has (`Light`, `RGB`, `RGBW`, `CCT`): on and off, and its brightness in %. */
+const light = (method: string): Field[] => [
+  { suffix: '', path: ['output'], kind: 'light', set: setting(method, 'on', onOff) },
+  { suffix: '-brightness', path: ['brightness'], kind: 'number', unit: '%', label: 'brightness', min: 0, max: 100, step: 1, set: setting(method, 'brightness', numberOf) },
+];
+
+/** A colour light's colour, as `#rrggbb`. */
+const color = (method: string): Field => ({
+  suffix: '-color',
+  path: ['rgb'],
+  kind: 'text',
+  label: 'colour',
+  read: (raw) => Array.isArray(raw) ? hexOf(raw[0], raw[1], raw[2]) : undefined,
+  set: setting(method, 'rgb', rgbOf),
+});
+
+/** A cover's way of moving with no state: `Cover.Open`. */
+const move = (suffix: string, method: string): Field => ({ suffix, path: [], kind: 'action', label: suffix.slice(1), set: (id) => ({ method, params: { id } }) });
+
 /** What each component type's status holds that is worth an entity. */
 const COMPONENTS: Record<string, Field[]> = {
-  switch: [{ suffix: '', path: ['output'], kind: 'switch', deviceClass: 'outlet' }, ...POWER],
-  light: [
-    { suffix: '', path: ['output'], kind: 'light' },
-    { suffix: '-brightness', path: ['brightness'], kind: 'sensor', unit: '%', label: 'brightness' },
+  switch: [{ suffix: '', path: ['output'], kind: 'switch', deviceClass: 'outlet', set: setting('Switch.Set', 'on', onOff) }, ...POWER],
+  light: [...light('Light.Set'), ...POWER],
+  rgb: [...light('RGB.Set'), color('RGB.Set'), ...POWER],
+  rgbw: [
+    ...light('RGBW.Set'),
+    color('RGBW.Set'),
+    { suffix: '-white', path: ['white'], kind: 'number', label: 'white', min: 0, max: 255, step: 1, set: setting('RGBW.Set', 'white', numberOf) },
+    ...POWER,
+  ],
+  cct: [
+    ...light('CCT.Set'),
+    { suffix: '-color-temperature', path: ['ct'], kind: 'number', unit: 'K', label: 'colour temperature', step: 1, set: setting('CCT.Set', 'ct', numberOf) },
     ...POWER,
   ],
   pm1: POWER,
   cover: [
-    { suffix: '-position', path: ['current_pos'], kind: 'sensor', unit: '%', label: 'position' },
+    {
+      suffix: '-position',
+      path: ['current_pos'],
+      kind: 'number',
+      unit: '%',
+      label: 'position',
+      min: 0,
+      max: 100,
+      step: 1,
+      set: setting('Cover.GoToPosition', 'pos', numberOf),
+    },
     { suffix: '-state', path: ['state'], kind: 'sensor', label: 'state' },
+    move('-open', 'Cover.Open'),
+    move('-close', 'Cover.Close'),
+    move('-stop', 'Cover.Stop'),
     ...POWER,
   ],
   em1: [
@@ -77,10 +146,6 @@ const PRESSES: Record<string, string> = {
 };
 
 const COMPONENT = /^([a-z0-9_]+)(?::(\d+))?$/;
-const SETTABLE: Record<string, string> = { switch: 'Switch', light: 'Light' };
-
-type Json = Record<string, unknown>;
-
 const isObject = (value: unknown): value is Json => value !== null && typeof value === 'object' && !Array.isArray(value);
 
 const at = (status: Json, path: string[]): unknown => {
@@ -110,6 +175,8 @@ export const createShelly = (options: ShellyOptions): MqttSource => {
   const devices = new Map<string, string>();
   /** Entities announced, by `<device>/<entity>`, with their kind. */
   const entities = new Map<string, EntityKind>();
+  /** How each settable entity is set, by `<device>/<entity>`. */
+  const setters = new Map<string, (value: string) => Call | undefined>();
   /** What each outstanding request of ours asked, by its id. */
   const pending = new Map<number, { prefix: string; method: string }>();
   let nextId = 1;
@@ -151,6 +218,8 @@ export const createShelly = (options: ShellyOptions): MqttSource => {
       const entity = `${name}${field.suffix}`;
       if (!entities.has(`${device}/${entity}`)) {
         entities.set(`${device}/${entity}`, field.kind);
+        const set = field.set;
+        if (set) setters.set(`${device}/${entity}`, (value) => set(Number(index ?? 0), value));
         updates.push({
           kind: 'entity',
           device,
@@ -159,13 +228,16 @@ export const createShelly = (options: ShellyOptions): MqttSource => {
           entityKind: field.kind,
           unit: field.unit,
           deviceClass: field.deviceClass,
+          min: field.min,
+          max: field.max,
+          step: field.step,
           ...(field.diagnostic ? { category: 'diagnostic' as const } : {}),
-          settable: field.suffix === '' && type in SETTABLE,
+          settable: set !== undefined,
           supported: true,
         });
       }
-      if (field.kind === 'button') continue;
-      const value = asValue(raw);
+      if (field.kind === 'button' || field.kind === 'action') continue;
+      const value = field.read ? field.read(raw) : asValue(raw);
       if (value !== undefined) updates.push({ kind: 'state', device, entity, value, retained });
     }
     return updates;
@@ -254,6 +326,7 @@ export const createShelly = (options: ShellyOptions): MqttSource => {
       if (prefix) prefixes.delete(prefix);
       devices.delete(device);
       for (const key of [...entities.keys()]) if (key.startsWith(`${device}/`)) entities.delete(key);
+      for (const key of [...setters.keys()]) if (key.startsWith(`${device}/`)) setters.delete(key);
       return [];
     },
     decode(topic, payload, retained) {
@@ -287,10 +360,9 @@ export const createShelly = (options: ShellyOptions): MqttSource => {
     },
     encode({ device, entity, value }) {
       const prefix = devices.get(device);
-      const match = /^(switch|light)-(\d+)$/.exec(entity);
-      if (!prefix || !match) return undefined;
-      const call = { id: nextId++, src, method: `${SETTABLE[match[1]]}.Set`, params: { id: Number(match[2]), on: value === 'on' } };
-      return [{ topic: `${prefix}/rpc`, payload: JSON.stringify(call) } satisfies Publish];
+      const call = prefix ? setters.get(`${device}/${entity}`)?.(value) : undefined;
+      if (!call) return undefined;
+      return [{ topic: `${prefix}/rpc`, payload: JSON.stringify({ id: nextId++, src, ...call }) } satisfies Publish];
     },
   };
 };

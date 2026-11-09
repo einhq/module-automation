@@ -7,7 +7,18 @@ import { createHaDiscovery } from '../lib/sources/ha-discovery.ts';
 import { createShelly } from '../lib/sources/shelly.ts';
 import { createShellyGen1 } from '../lib/sources/shelly-gen1.ts';
 import type { Update } from '../lib/sources/types.ts';
-import { esphomeConfigs, esphomeStates, shellyButton, shellyGen1Plug, shellyPlug, templatedConfig } from './fixtures.ts';
+import {
+  esphomeConfigs,
+  esphomeStates,
+  shellyButton,
+  shellyColorLight,
+  shellyCover,
+  shellyGen1Light,
+  shellyGen1Plug,
+  shellyGen1Roller,
+  shellyPlug,
+  templatedConfig,
+} from './fixtures.ts';
 
 const of = <K extends Update['kind']>(updates: Update[], kind: K) => updates.filter((update): update is Extract<Update, { kind: K }> => update.kind === kind);
 
@@ -191,6 +202,118 @@ Deno.test('shelly: a plug and a four-button input', async (t) => {
     assertEquals(source.decode('hall-sensor/status', 'online', true), []);
     assertEquals(source.decode('garage/status/door', JSON.stringify({ open: true }), false), []);
     assertEquals(source.decode('garage/online', 'yes', false), []);
+  });
+});
+
+Deno.test('shelly: a colour light and a cover', async (t) => {
+  const source = createShelly({ src: 's' });
+  const callOf = (device: string, entity: string, value: string) => {
+    const set = source.encode({ device, entity, value });
+    return set ? (({ method, params }) => ({ method, params }))(JSON.parse(set[0].payload)) : undefined;
+  };
+
+  await t.step('a colour light has its brightness, colour and white, each settable', () => {
+    const updates = source.decode(shellyColorLight.status.topic, shellyColorLight.status.payload, false);
+    assertEquals(of(updates, 'entity').map((entity) => [entity.entity, entity.entityKind, entity.settable, entity.max ?? '']), [
+      ['rgbw-0', 'light', true, ''],
+      ['rgbw-0-brightness', 'number', true, 100],
+      ['rgbw-0-color', 'text', true, ''],
+      ['rgbw-0-white', 'number', true, 255],
+      ['rgbw-0-power', 'sensor', false, ''],
+    ]);
+    assertEquals(of(updates, 'state').map((state) => [state.entity, state.value]), [
+      ['rgbw-0', true],
+      ['rgbw-0-brightness', 40],
+      ['rgbw-0-color', '#ff8000'],
+      ['rgbw-0-white', 10],
+      ['rgbw-0-power', 6.1],
+    ]);
+  });
+
+  await t.step("each is set with the light's own call", () => {
+    assertEquals(callOf('desk-lamp', 'rgbw-0', 'on'), { method: 'RGBW.Set', params: { id: 0, on: true } });
+    assertEquals(callOf('desk-lamp', 'rgbw-0-brightness', '75'), { method: 'RGBW.Set', params: { id: 0, brightness: 75 } });
+    assertEquals(callOf('desk-lamp', 'rgbw-0-color', '#00ff7f'), { method: 'RGBW.Set', params: { id: 0, rgb: [0, 255, 127] } });
+    assertEquals(callOf('desk-lamp', 'rgbw-0-color', '10, 20, 30'), { method: 'RGBW.Set', params: { id: 0, rgb: [10, 20, 30] } });
+    assertEquals(callOf('desk-lamp', 'rgbw-0-color', 'blue'), undefined);
+    assertEquals(callOf('desk-lamp', 'rgbw-0-brightness', 'bright'), undefined);
+    assertEquals(callOf('desk-lamp', 'rgbw-0-power', '1'), undefined);
+  });
+
+  await t.step('a cover has its position to set, its state, and open, close and stop', () => {
+    const updates = source.decode(shellyCover.status.topic, shellyCover.status.payload, false);
+    assertEquals(of(updates, 'entity').map((entity) => [entity.entity, entity.entityKind, entity.settable]), [
+      ['cover-0-position', 'number', true],
+      ['cover-0-state', 'sensor', false],
+      ['cover-0-open', 'action', true],
+      ['cover-0-close', 'action', true],
+      ['cover-0-stop', 'action', true],
+      ['cover-0-power', 'sensor', false],
+    ]);
+    assertEquals(of(updates, 'state').map((state) => state.entity), ['cover-0-position', 'cover-0-state', 'cover-0-power']);
+    assertEquals(callOf('kitchen-blind', 'cover-0-position', '60'), { method: 'Cover.GoToPosition', params: { id: 0, pos: 60 } });
+    assertEquals(callOf('kitchen-blind', 'cover-0-close', 'press'), { method: 'Cover.Close', params: { id: 0 } });
+    assertEquals(callOf('kitchen-blind', 'cover-0-stop', 'press'), { method: 'Cover.Stop', params: { id: 0 } });
+  });
+});
+
+Deno.test('shelly-gen1: a colour light and a roller', async (t) => {
+  const light = shellyGen1Light;
+  const roller = shellyGen1Roller;
+
+  await t.step('a light in colour mode has its gain as its brightness, its colour and its temperature', () => {
+    const source = createShellyGen1();
+    assertEquals(of(source.decode(light.light.topic, light.light.payload, true), 'entity').map((entity) => [entity.entity, entity.entityKind, entity.settable]), [[
+      'light-0',
+      'light',
+      true,
+    ]]);
+    const updates = source.decode(light.status.topic, light.status.payload, true);
+    assertEquals(of(updates, 'entity').map((entity) => [entity.entity, entity.entityKind, entity.settable]), [
+      ['light-0-brightness', 'number', true],
+      ['light-0-color', 'text', true],
+      ['light-0-color-temperature', 'number', true],
+    ]);
+    assertEquals(of(updates, 'state').map((state) => [state.entity, state.value]), [
+      ['light-0-brightness', 70],
+      ['light-0-color', '#0080ff'],
+      ['light-0-color-temperature', 4750],
+    ]);
+  });
+
+  await t.step('it is set on its set topic, its brightness as the gain while in colour mode', () => {
+    const source = createShellyGen1();
+    source.decode(light.status.topic, light.status.payload, true);
+    const name = 'shellycolorbulb-a1b2c3d4e5f7';
+    const set = `shellies/${light.id}/light/0/set`;
+    assertEquals(source.encode({ device: name, entity: 'light-0', value: 'off' }), [{ topic: `shellies/${light.id}/light/0/command`, payload: 'off' }]);
+    assertEquals(source.encode({ device: name, entity: 'light-0-brightness', value: '50' }), [{ topic: set, payload: JSON.stringify({ gain: 50 }) }]);
+    assertEquals(source.encode({ device: name, entity: 'light-0-color', value: '#ff0000' }), [{
+      topic: set,
+      payload: JSON.stringify({ mode: 'color', red: 255, green: 0, blue: 0 }),
+    }]);
+    assertEquals(source.encode({ device: name, entity: 'light-0-color-temperature', value: '3000' }), [{ topic: set, payload: JSON.stringify({ temp: 3000 }) }]);
+    source.decode(light.status.topic, JSON.stringify({ ison: true, mode: 'white', brightness: 30, temp: 3000 }), false);
+    assertEquals(source.encode({ device: name, entity: 'light-0-brightness', value: '50' }), [{ topic: set, payload: JSON.stringify({ brightness: 50 }) }]);
+    assertEquals(source.decode(set, JSON.stringify({ gain: 50 }), false), [], 'its own command is not a reading');
+  });
+
+  await t.step('a roller has its state, a position it does not know yet, and open, close and stop', () => {
+    const source = createShellyGen1();
+    const name = 'shellyswitch25-a1b2c3d4e5f8';
+    const state = source.decode(roller.state.topic, roller.state.payload, true);
+    assertEquals(of(state, 'entity').map((entity) => [entity.entity, entity.entityKind, entity.settable]), [
+      ['roller-0-state', 'sensor', false],
+      ['roller-0-open', 'action', true],
+      ['roller-0-close', 'action', true],
+      ['roller-0-stop', 'action', true],
+    ]);
+    assertEquals(of(state, 'state').map((update) => [update.entity, update.value]), [['roller-0-state', 'stop']]);
+    const position = source.decode(roller.position.topic, roller.position.payload, true);
+    assertEquals([of(position, 'entity')[0].entityKind, of(position, 'state')[0].value], ['number', null]);
+    assertEquals(source.encode({ device: name, entity: 'roller-0-open', value: 'press' }), [{ topic: `shellies/${roller.id}/roller/0/command`, payload: 'open' }]);
+    assertEquals(source.encode({ device: name, entity: 'roller-0-position', value: '40' }), [{ topic: `shellies/${roller.id}/roller/0/command/pos`, payload: '40' }]);
+    assertEquals(source.decode(`shellies/${roller.id}/roller/0/command/pos`, '40', false), [], 'its own command is not a reading');
   });
 });
 
