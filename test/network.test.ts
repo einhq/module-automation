@@ -12,7 +12,7 @@ import { identify, webPageOf } from '../lib/network/identify.ts';
 import { parseIppResponse, printerAttributesRequest } from '../lib/network/ipp.ts';
 import { decodeCastMessage, encodeCastMessage } from '../lib/network/cast.ts';
 import { changesOf, createPolledDrivers, reach } from '../lib/network/polled.ts';
-import { checkHttpConfig, expandUrl, fetchAnswer, intervalOf, parseReadings, readAnswer } from '../lib/network/http.ts';
+import { checkHttpConfig, controlAddress, expandUrl, fetchAnswer, intervalOf, parseControls, parseReadings, readAnswer } from '../lib/network/http.ts';
 import { ippResponse, startSnmpAgent } from './fixtures.ts';
 import { snmpWalk } from '../lib/network/snmp.ts';
 
@@ -361,5 +361,55 @@ Deno.test('the http driver reads what is named in an answer', async (t) => {
       undefined,
     ]]);
     await assertRejects(() => http.poll({ name: 'weather', ip: '', config: { url: 'http://192.0.2.1/', read: 'x=y' } }), Error, 'none of its readings is in the answer');
+  });
+
+  await t.step("controls as each maker spells them, put in the address, from the device's", () => {
+    const status = 'http://admin:secret@192.0.2.32/cm?cmnd=Status%2010';
+    const [tasmota] = parseControls('power=cm?cmnd=Power%20{value} ON/OFF');
+    assertEquals(controlAddress(tasmota, status, true), 'http://admin:secret@192.0.2.32/cm?cmnd=Power%20ON');
+    assertEquals(controlAddress(tasmota, status, false), 'http://admin:secret@192.0.2.32/cm?cmnd=Power%20OFF');
+    const [gen1, gen2, reboot] = parseControls('relay=http://192.0.2.31/relay/0?turn={value} on/off\nOn=/rpc/Switch.Set?id=0&on={value} true/false; reboot=/reboot');
+    assertEquals(controlAddress(gen1, status, true), 'http://192.0.2.31/relay/0?turn=on');
+    assertEquals([gen2.name, gen2.label], ['on', 'On']);
+    assertEquals(controlAddress(gen2, 'http://192.0.2.33/rpc/Shelly.GetStatus', false), 'http://192.0.2.33/rpc/Switch.Set?id=0&on=false');
+    assertEquals([reboot.on, controlAddress(reboot, status, null)], [undefined, 'http://admin:secret@192.0.2.32/reboot']);
+    assertThrows(() => controlAddress(tasmota, status, 50), Error, 'power is switched on or off, not set to 50');
+  });
+
+  await t.step('a control not understood is refused, saying what', () => {
+    assertThrows(() => parseControls('power'), Error, "a control is name=address [on/off], not 'power'");
+    assertThrows(() => parseControls('power=/cm?cmnd=Power%20{value}'), Error, 'names how on and off are spelled');
+    assertThrows(() => parseControls('power=/reboot on/off'), Error, 'has no {value} in its address');
+    assertThrows(() => parseControls('power=/x?{value} on'), Error, "spells on and off as on/off, not 'on'");
+    assertThrows(() => parseControls('a=/x; a=/y'), Error, 'the control a is named twice');
+    assertThrows(() => checkHttpConfig({ url: 'http://192.0.2.1/', read: 'a=b', set: 'p=ftp://192.0.2.1/{value} 1/0' }), Error, 'the control p is http or https');
+  });
+
+  await t.step('a poll announces controls as switches and actions, a switch reading its state; a write asks its address', async () => {
+    const asked: string[] = [];
+    const http = createPolledDrivers((url) => {
+      asked.push(url);
+      return Promise.resolve(new Response('{"POWER":"ON","StatusSNS":{"ENERGY":{"Power":12}}}'));
+    }).find((driver) => driver.name === 'http')!;
+    const device = {
+      name: 'desk-plug',
+      ip: '',
+      config: {
+        url: 'http://192.0.2.32/cm?cmnd=Status%200',
+        read: 'power=POWER; watts=StatusSNS.ENERGY.Power W',
+        set: 'power=cm?cmnd=Power%20{value} ON/OFF; restart=cm?cmnd=Restart%201',
+      },
+    };
+    const polled = await http.poll(device);
+    assertEquals(polled.values, { power: true, watts: 12 });
+    assertEquals(polled.entities.map((each) => [each.entity, each.entityKind, each.settable]), [['watts', 'sensor', false], ['power', 'switch', true], [
+      'restart',
+      'action',
+      true,
+    ]]);
+    await http.write!(device, 'power', false);
+    await http.write!(device, 'restart', null);
+    assertEquals(asked.slice(1), ['http://192.0.2.32/cm?cmnd=Power%20OFF', 'http://192.0.2.32/cm?cmnd=Restart%201']);
+    await assertRejects(() => http.write!(device, 'watts', 1), Error, 'watts cannot be set');
   });
 });

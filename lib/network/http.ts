@@ -9,6 +9,10 @@
  *   `temperature=current.temperature_2m °C; wind=current.wind_speed_10m m/s`.
  * - `interval` — how often it is asked: seconds, or `30s`, `15m`, `1h`; 5 minutes unless given,
  *   10 seconds at the least.
+ * - `set` — the controls, `name=address [on/off]`, separated by `;` or new lines: the address asked
+ *   to set it, absolute or from `url`'s, with `{value}` in it for the value as the device spells it
+ *   (`power=cm?cmnd=Power%20{value} ON/OFF`). One with `on/off` is a switch, whose state is the
+ *   reading of its name; one without `{value}` is an action, asked as it is.
  *
  * A path walks the answer: `a.b` a field, `['a b']` one whose name is not a word, `[0]` an item,
  * `[-1]` the last, `[from..to]` the item of a list whose `from` has come and whose `to` has not (an
@@ -27,6 +31,9 @@ type Step =
 
 /** One reading a person named: its endpoint, where it is in the answer, and its unit. */
 type HttpReading = { name: string; label: string; path: Step[]; unit?: string };
+
+/** One control a person named: its endpoint, the address that sets it, and how on and off are spelled. */
+export type HttpControl = { name: string; label: string; address: string; on?: string; off?: string };
 
 const DEFAULT_INTERVAL_MS = 300_000;
 const MIN_INTERVAL_MS = 10_000;
@@ -82,6 +89,43 @@ export const parseReadings = (text: string): HttpReading[] => {
   return readings;
 };
 
+/** The controls of a `set` config; throws, saying which, when one is not understood. */
+export const parseControls = (text: string): HttpControl[] => {
+  const controls: HttpControl[] = [];
+  for (const line of text.split(/[;\n]/).map((each) => each.trim()).filter(Boolean)) {
+    const at = line.indexOf('=');
+    const name = deviceName(line.slice(0, Math.max(at, 0)));
+    if (at < 1 || !name) throw new Error(`a control is name=address [on/off], not '${line}'`);
+    const [address, values, ...rest] = line.slice(at + 1).trim().split(/\s+/);
+    if (!address) throw new Error(`the control ${name} names no address`);
+    if (rest.length) throw new Error(`the control ${name} is name=address [on/off], not '${line}'`);
+    if (controls.some((each) => each.name === name)) throw new Error(`the control ${name} is named twice`);
+    const takesValue = address.includes('{value}');
+    if (takesValue && !values) throw new Error(`the control ${name} puts in {value}, so it names how on and off are spelled: on/off`);
+    if (!takesValue && values) throw new Error(`the control ${name} names ${values} but has no {value} in its address to put it in`);
+    const [on, off] = values?.split('/') ?? [];
+    if (values && !(on && off && values.split('/').length === 2)) throw new Error(`the control ${name} spells on and off as on/off, not '${values}'`);
+    controls.push({ name, label: line.slice(0, at).trim(), address, ...(values ? { on, off } : {}) });
+  }
+  return controls;
+};
+
+/** The address that sets `control` to `value`, resolved from the device's `url`. */
+export const controlAddress = (control: HttpControl, url: string, value: DeviceValue): string => {
+  const spelled = value === true ? control.on : value === false ? control.off : undefined;
+  if (control.on !== undefined && spelled === undefined) throw new Error(`${control.name} is switched on or off, not set to ${value}`);
+  return new URL(control.address.replaceAll('{value}', encodeURIComponent(spelled ?? '')), url).href;
+};
+
+/** A switch's state from the reading of its name: on or off as the device spells them, or a boolean. */
+export const switchState = (control: HttpControl, value: DeviceValue): boolean | undefined => {
+  if (typeof value === 'boolean') return value;
+  const text = String(value).toLowerCase();
+  if (text === control.on?.toLowerCase()) return true;
+  if (text === control.off?.toLowerCase()) return false;
+  return undefined;
+};
+
 /** How often a device of the http driver is asked, from its `interval`; throws when it is not a duration. */
 export const intervalOf = (text: string | undefined): number => {
   if (!text?.trim()) return DEFAULT_INTERVAL_MS;
@@ -111,6 +155,10 @@ export const checkHttpConfig = (config: Record<string, string>): void => {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(`url is http or https, not ${url.protocol}`);
   parseReadings(config.read ?? '');
   intervalOf(config.interval);
+  for (const control of parseControls(config.set ?? '')) {
+    const address = new URL(control.address.replaceAll('{value}', ''), url);
+    if (address.protocol !== 'http:' && address.protocol !== 'https:') throw new Error(`the control ${control.name} is http or https, not ${address.protocol}`);
+  }
 };
 
 const timeOf = (value: unknown): number => typeof value === 'string' || typeof value === 'number' ? new Date(value).getTime() : NaN;
