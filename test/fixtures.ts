@@ -4,6 +4,8 @@
  * four-button input by the porch.
  */
 
+import dgram from 'node:dgram';
+
 export type Message = { topic: string; payload: string; retain?: boolean };
 
 const esphomeDevice = {
@@ -173,4 +175,91 @@ export const ippResponse = (attributes: [number, string, (string | number)[]][])
     });
   }
   return new Uint8Array([...bytes, 0x03]);
+};
+
+type AgentObject = [oid: string, type: 'int' | 'gauge' | 'ticks' | 'string' | 'oid', value: number | string];
+
+/**
+ * An SNMPv2c agent on this machine's loopback answering GET and GETBULK from `objects` for the
+ * community `public`, and nothing for any other: enough of an agent for the snmp driver.
+ */
+export const startSnmpAgent = (objects: AgentObject[]): { ready: Promise<number>; close(): void } => {
+  const key = (oid: string) => oid.split('.').map((part) => part.padStart(10, '0')).join('.');
+  const sorted = [...objects].sort((a, b) => key(a[0]).localeCompare(key(b[0])));
+  const length = (n: number) => n < 0x80 ? [n] : n < 0x100 ? [0x81, n] : [0x82, n >> 8, n & 0xff];
+  const tlv = (tag: number, body: number[]) => [tag, ...length(body.length), ...body];
+  const int = (n: number) => {
+    const bytes: number[] = [];
+    do {
+      bytes.unshift(n & 0xff);
+      n = Math.floor(n / 256);
+    } while (n > 0 || bytes[0] & 0x80);
+    return bytes;
+  };
+  const oid = (text: string) => {
+    const parts = text.split('.').map(Number);
+    const bytes = [parts[0] * 40 + parts[1]];
+    for (const part of parts.slice(2)) {
+      const chunk = [part & 0x7f];
+      for (let rest = part >> 7; rest > 0; rest >>= 7) chunk.unshift((rest & 0x7f) | 0x80);
+      bytes.push(...chunk);
+    }
+    return bytes;
+  };
+  const value = ([, type, v]: AgentObject) =>
+    type === 'string'
+      ? tlv(0x04, [...new TextEncoder().encode(String(v))])
+      : type === 'oid'
+      ? tlv(0x06, oid(String(v)))
+      : tlv({ int: 0x02, gauge: 0x42, ticks: 0x43 }[type], int(Number(v)));
+  const read = (bytes: Uint8Array, at: number) => {
+    let len = bytes[at + 1], start = at + 2;
+    if (len & 0x80) {
+      const count = len & 0x7f;
+      len = 0;
+      for (let i = 0; i < count; i++) len = len * 256 + bytes[start + i];
+      start += count;
+    }
+    return { tag: bytes[at], body: bytes.subarray(start, start + len), end: start + len };
+  };
+  const all = (body: Uint8Array) => {
+    const out = [];
+    for (let at = 0; at < body.length;) {
+      const element = read(body, at);
+      out.push(element);
+      at = element.end;
+    }
+    return out;
+  };
+  const oidText = (body: Uint8Array) => {
+    const parts = [Math.floor(body[0] / 40), body[0] % 40];
+    let n = 0;
+    for (const byte of body.subarray(1)) {
+      n = n * 128 + (byte & 0x7f);
+      if (!(byte & 0x80)) parts.push(n), n = 0;
+    }
+    return parts.join('.');
+  };
+  const socket = dgram.createSocket('udp4');
+  socket.on('message', (bytes: Uint8Array, from: { address: string; port: number }) => {
+    const [, community, pdu] = all(read(bytes, 0).body);
+    if (new TextDecoder().decode(community.body) !== 'public') return;
+    const [id, , repetitions, list] = all(pdu.body);
+    const asked = all(list.body).map((varbind) => oidText(all(varbind.body)[0].body));
+    const answers: number[] = [];
+    for (const each of asked) {
+      if (pdu.tag === 0xa0) {
+        const found = sorted.find((object) => object[0] === each);
+        answers.push(...tlv(0x30, [...tlv(0x06, oid(each)), ...(found ? value(found) : [0x81, 0])]));
+      } else {
+        const after = sorted.filter((object) => key(object[0]) > key(each)).slice(0, repetitions.body[0] || 10);
+        for (const object of after) answers.push(...tlv(0x30, [...tlv(0x06, oid(object[0])), ...value(object)]));
+        if (after.length === 0) answers.push(...tlv(0x30, [...tlv(0x06, oid(each)), 0x82, 0]));
+      }
+    }
+    const response = tlv(0xa2, [...tlv(0x02, [...id.body]), 0x02, 1, 0, 0x02, 1, 0, ...tlv(0x30, answers)]);
+    socket.send(new Uint8Array(tlv(0x30, [0x02, 1, 1, ...tlv(0x04, [...community.body]), ...response])), from.port, from.address);
+  });
+  const ready = new Promise<number>((resolve) => socket.bind(0, '127.0.0.1', () => resolve(socket.address().port)));
+  return { ready, close: () => socket.close() };
 };

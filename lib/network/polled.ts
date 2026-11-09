@@ -5,6 +5,8 @@
  * - `network`: any host; whether it answers, and how fast (a TCP connection to one of its ports,
  *   which a refusal answers as well as an accept);
  * - `ipp`: a printer; its state, warnings and the level of each ink or toner (IPP);
+ * - `snmp`: a NAS, a router or anything else that answers SNMP; its uptime, load, memory, each
+ *   volume's use and its temperatures, from the standard MIBs (Host Resources, net-snmp's UCD);
  * - `cast`: a Google Cast device; whether it plays and what (title, artist and app as one line), its
  *   volume and mute, which can be set, and play, pause and stop.
  *
@@ -16,6 +18,7 @@ import { deviceName, type DeviceValue } from '@ein/api';
 import type { Fetch } from './adopt.ts';
 import { castCommand, castStatus } from './cast.ts';
 import { getPrinterAttributes } from './ipp.ts';
+import { snmpGet, type SnmpValue, snmpWalk } from './snmp.ts';
 import type { DeviceChange, EntityUpdate } from '../sources/mod.ts';
 
 /** A device of one of these drivers, where it is now. */
@@ -26,6 +29,10 @@ export type PolledDevice = {
   port?: number;
   /** A printer's IPP resource (`ipp/print`). */
   path?: string;
+  /** The SNMP community it answers. */
+  community?: string;
+  /** The port its SNMP agent answers on, when not 161. */
+  snmpPort?: number;
 };
 
 export type PolledDriver = {
@@ -123,6 +130,87 @@ const createIpp = (fetcher: Fetch): PolledDriver => ({
   },
 });
 
+/** The SNMP community asked when a device names none: the read-only default most devices ship with. */
+export const DEFAULT_COMMUNITY = 'public';
+
+const OID = {
+  descr: '1.3.6.1.2.1.1.1.0',
+  uptime: '1.3.6.1.2.1.1.3.0',
+  /** HOST-RESOURCES-MIB hrStorageEntry: .2 type, .3 description, .4 allocation units, .5 size, .6 used. */
+  storage: '1.3.6.1.2.1.25.2.3.1',
+  fixedDisk: '1.3.6.1.2.1.25.2.1.4',
+  ram: '1.3.6.1.2.1.25.2.1.2',
+  /** UCD-SNMP-MIB laLoad.1, the load average over a minute. */
+  load: '1.3.6.1.4.1.2021.10.1.3.1',
+  /** LM-SENSORS-MIB lmTempSensorsEntry: .2 name, .3 value in thousandths of °C. */
+  temperatures: '1.3.6.1.4.1.2021.13.16.2.1',
+};
+
+/** Volumes that are a system's own rather than storage: memory, devices, the container's files. */
+const SYSTEM_MOUNT = /^\/(dev|run|sys|proc|etc|boot)(\/|$)/;
+const GB = 1024 ** 3;
+
+/** A table walked, as row index → column → value. */
+const rows = (walked: { oid: string; value: SnmpValue }[], root: string): Map<string, Map<number, SnmpValue>> => {
+  const table = new Map<string, Map<number, SnmpValue>>();
+  for (const { oid, value } of walked) {
+    const [column, ...index] = oid.slice(root.length + 1).split('.');
+    const key = index.join('.');
+    if (!table.has(key)) table.set(key, new Map());
+    table.get(key)!.set(Number(column), value);
+  }
+  return table;
+};
+
+const createSnmp = (): PolledDriver => ({
+  name: 'snmp',
+  description: 'A NAS, a router or anything that answers SNMP: its uptime, load, memory, volumes and temperatures',
+  intervalMs: 60_000,
+  poll: async (device) => {
+    const target = { host: device.ip, port: device.snmpPort, community: device.community || DEFAULT_COMMUNITY };
+    const system = await snmpGet(target, [OID.uptime, OID.load]);
+    const entities: EntityUpdate[] = [];
+    const values: Record<string, DeviceValue> = {};
+    const uptime = Number(system.get(OID.uptime));
+    if (Number.isFinite(uptime)) {
+      entities.push(entity(device.name, 'uptime', { entityKind: 'sensor', unit: 'd', label: 'uptime', category: 'diagnostic' }));
+      values.uptime = Math.round(uptime / 100 / 86_400 * 10) / 10;
+    }
+    const load = Number(system.get(OID.load));
+    if (Number.isFinite(load)) {
+      entities.push(entity(device.name, 'load', { entityKind: 'sensor', label: 'load', category: 'diagnostic' }));
+      values.load = load;
+    }
+    for (const row of rows(await snmpWalk(target, OID.storage).catch(() => []), OID.storage).values()) {
+      const [type, name, units, size, used] = [row.get(2), String(row.get(3) ?? ''), Number(row.get(4)), Number(row.get(5)), Number(row.get(6))];
+      if (!(units > 0 && size > 0 && Number.isFinite(used))) continue;
+      if (type === OID.ram && name === 'Physical memory') {
+        entities.push(entity(device.name, 'memory-used', { entityKind: 'sensor', unit: '%', label: 'memory used', category: 'diagnostic' }));
+        values['memory-used'] = Math.round(used / size * 1000) / 10;
+      } else if (type === OID.fixedDisk && !SYSTEM_MOUNT.test(name) && size * units >= GB) {
+        const id = name === '/' ? 'root' : deviceName(name) || 'volume';
+        entities.push(
+          entity(device.name, `${id}-used`, { entityKind: 'sensor', unit: '%', label: `${name} used` }),
+          entity(device.name, `${id}-free`, { entityKind: 'sensor', unit: 'GB', label: `${name} free` }),
+        );
+        values[`${id}-used`] = Math.round(used / size * 1000) / 10;
+        values[`${id}-free`] = Math.round((size - used) * units / GB * 10) / 10;
+      }
+    }
+    for (const row of rows(await snmpWalk(target, OID.temperatures).catch(() => []), OID.temperatures).values()) {
+      const [name, value] = [String(row.get(2) ?? ''), Number(row.get(3))];
+      if (!name || !Number.isFinite(value)) continue;
+      const id = `${deviceName(name) || 'sensor'}-temperature`;
+      entities.push(entity(device.name, id, { entityKind: 'sensor', unit: '°C', deviceClass: 'temperature', label: `${name} temperature` }));
+      values[id] = Math.round(value / 100) / 10;
+    }
+    return { entities, values };
+  },
+});
+
+/** Whether the host at `ip` answers SNMP with `community`. */
+export const answersSnmp = (ip: string, community: string): Promise<boolean> => snmpGet({ host: ip, community }, [OID.descr]).then((values) => values.size > 0, () => false);
+
 const CAST_ACTIONS = ['play', 'pause', 'stop'] as const;
 
 const cast: PolledDriver = {
@@ -157,10 +245,10 @@ const cast: PolledDriver = {
 };
 
 /** The polled drivers, by name. */
-export const createPolledDrivers = (fetcher: Fetch): PolledDriver[] => [network, createIpp(fetcher), cast];
+export const createPolledDrivers = (fetcher: Fetch): PolledDriver[] => [network, createIpp(fetcher), createSnmp(), cast];
 
 /** The names of the polled drivers. */
-export const POLLED_DRIVERS: readonly string[] = ['network', 'ipp', 'cast'];
+export const POLLED_DRIVERS: readonly string[] = ['network', 'ipp', 'snmp', 'cast'];
 
 /** What one poll says, as the changes the device writer applies. */
 export const changesOf = (device: string, polled: { entities: EntityUpdate[]; values: Record<string, DeviceValue> }, known: Set<string>): DeviceChange[] => [

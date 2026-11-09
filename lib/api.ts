@@ -80,15 +80,17 @@ export type NetworkIdentity = {
   label: string;
   model?: string;
   firmware?: string;
+  serial?: string;
   /** What it would be as a device (`speaker`, `printer`), where its kind says. */
   class?: string;
   /** It can become a device of automation's, by `automation-adopt` or by hand as `connect` says. */
   addable: boolean;
   /**
    * The driver `automation-adopt` adds it with: a Shelly's, which it points at the broker, or one
-   * that asks the device itself (`network`, `ipp`, `cast`).
+   * that asks the device itself (`network`, `ipp`, `snmp`, `cast`). A host offered as `network` is
+   * added as `snmp` when it answers SNMP.
    */
-  adopt?: 'shelly' | 'shelly-gen1' | 'network' | 'ipp' | 'cast';
+  adopt?: 'shelly' | 'shelly-gen1' | 'network' | 'ipp' | 'snmp' | 'cast';
   /** What adding it does, or what it takes. */
   connect?: string;
 };
@@ -125,3 +127,6 @@ export type AdoptAnswer = { id: string; label: string; driver: string; broker?: 
 
 /** `automation-found <id>`: one host, and everything the network listener heard of it. */
 export type FoundDetail = FoundDevice & { host: NetworkHost };
+
+/** `automation-snmp`: one object of a walk, its value as text when it is a 64-bit counter. */
+export type SnmpObject = { oid: string; type: string; value: string | number | null };

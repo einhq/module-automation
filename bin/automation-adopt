@@ -5,12 +5,13 @@
  * A Shelly is pointed at the broker (CFG_AUTOMATION_DEVICE_BROKER, else what the network listener
  * says it is), with the account devices sign in with, and restarted: the shelly or shelly-gen1 driver
  * hears it as it comes back. Anything else is a device under /dev at once, of the driver that asks it
- * itself: ipp for a printer, cast for a Cast speaker, network for whether it answers.
+ * itself: ipp for a printer, cast for a Cast speaker, snmp for one that answers SNMP (with
+ * CFG_AUTOMATION_SNMP_COMMUNITY), network for whether it answers.
  */
 
 import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags, serviceKey } from '@ein/client';
 import type { AdoptAnswer } from '@automation/api';
-import { addPolledDevice, adoptShelly, assertDevicesMember, readFound, readFoundDetail } from '@automation/network';
+import { addPolledDevice, adoptShelly, answersSnmp, assertDevicesMember, DEFAULT_COMMUNITY, readFound, readFoundDetail } from '@automation/network';
 
 const automationAdopt = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
@@ -31,8 +32,11 @@ const automationAdopt = async (cmd: Command): CmdReturn => {
     if (host.device) return await fail(`${host.label} is the device ${host.device} already`);
     if (!host.adopt) return await fail(`${host.label} cannot be added from here${host.connect ? `: ${host.connect}` : ''}`);
     if (host.adopt !== 'shelly' && host.adopt !== 'shelly-gen1') {
-      const device = await addPolledDevice(cmd, (await readFoundDetail(cmd, host.id))!, host.adopt);
-      const added: AdoptAnswer = { id: host.id, label: host.label, driver: host.adopt, restarted: false, device };
+      // A host with nothing better than whether it answers says more over SNMP, when it speaks it.
+      const community = (cmd.env.CFG_AUTOMATION_SNMP_COMMUNITY ?? '').trim() || DEFAULT_COMMUNITY;
+      const driver = host.adopt === 'network' && await answersSnmp(host.ip, community) ? 'snmp' : host.adopt;
+      const device = await addPolledDevice(cmd, (await readFoundDetail(cmd, host.id))!, driver, community);
+      const added: AdoptAnswer = { id: host.id, label: host.label, driver, restarted: false, device };
       if (cmd.json) await cmd.writeJSON(added satisfies AdoptAnswer);
       else await cmd.writeLn(`${host.label} is the device ${device} now`);
       return 0;

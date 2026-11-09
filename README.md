@@ -17,8 +17,10 @@ a speaker, a printer, …), says whether it is a device already and, given one, 
 listener heard of it. `automation-adopt` adds one: a Shelly's MQTT is pointed at the broker and it
 is restarted, so its driver takes it; anything else becomes a device of a driver that asks it
 itself, over the network: `ipp` for a printer (state, warnings, ink and toner), `cast` for a Google
-Cast speaker (what it plays; volume, mute, play, pause and stop), and `network` for the rest
-(whether it answers, and how fast). `automation-ignore` leaves one out. The Devices page shows how
+Cast speaker (what it plays; volume, mute, play, pause and stop), `snmp` for a NAS or anything
+else that answers SNMP (uptime, load, memory, each volume's use, temperatures; the community is
+`CFG_AUTOMATION_SNMP_COMMUNITY`), and `network` for the rest (whether it answers, and how fast).
+`automation-snmp <host> [oid]` walks what a device's agent answers. `automation-ignore` leaves one out. The Devices page shows how
 many can be added, and opens them as a page of their own.
 
 The devices, their pages and the device commands are EiN core's; this module brings the drivers and

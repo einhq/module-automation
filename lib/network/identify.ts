@@ -12,8 +12,8 @@ type Ssdp = NetworkHost['ssdp'][number];
 
 type Pattern = {
   /** Matches the host, and says what of it is the label and model when it does. */
-  match(host: NetworkHost): { label?: string; model?: string; firmware?: string } | undefined;
-  identity: Omit<NetworkIdentity, 'label' | 'model' | 'firmware'>;
+  match(host: NetworkHost): { label?: string; model?: string; firmware?: string; serial?: string; vendor?: string } | undefined;
+  identity: Omit<NetworkIdentity, 'label' | 'model' | 'firmware' | 'serial'>;
 };
 
 const service = (host: NetworkHost, type: string): Mdns | undefined => host.mdns.find((each) => each.type === type);
@@ -146,10 +146,27 @@ const PATTERNS: Pattern[] = [
     identity: { kind: 'media', class: 'media', addable: true },
   },
   {
+    // NETGEAR's ReadyNAS says what it is in a record of its own, beside its file shares.
+    match: (host) => {
+      const readynas = service(host, '_readynas._tcp');
+      return readynas && {
+        label: host.names[0] ? stem(host.names[0]) : readynas.instance.replace(/^ReadyNAS Discovery \[(.*)\]$/, '$1'),
+        vendor: readynas.txt.vendor,
+        model: readynas.txt.model,
+        serial: readynas.txt.serial,
+      };
+    },
+    identity: { kind: 'storage', vendor: 'NETGEAR', class: 'storage', addable: true },
+  },
+  {
+    // A file share is named after its host, not after the share (`zoidberg (CIFS)`).
     match: (host) => {
       const nas = services(host, (each) => ['_smb._tcp', '_afpovertcp._tcp', '_adisk._tcp', '_nfs._tcp'].includes(each.type)) ??
         described(host, (each) => /synology|qnap/i.test(each.manufacturer ?? ''));
-      return nas && { label: 'instance' in nas ? nas.instance : nas.friendlyName, model: 'modelName' in nas ? nas.modelName : undefined };
+      return nas && {
+        label: host.names[0] ? stem(host.names[0]) : 'instance' in nas ? nas.instance : nas.friendlyName,
+        model: 'modelName' in nas ? nas.modelName : undefined,
+      };
     },
     identity: { kind: 'storage', class: 'storage', addable: true },
   },
@@ -180,6 +197,8 @@ export const identify = (host: NetworkHost): NetworkIdentity => {
     const presence = pattern.identity.addable && !pattern.identity.adopt && !MQTT_ONLY.has(pattern.identity.kind);
     return {
       ...pattern.identity,
+      ...(found.vendor ? { vendor: found.vendor } : {}),
+      ...(found.serial ? { serial: found.serial } : {}),
       ...(presence ? { adopt: 'network' as const, connect: pattern.identity.connect ?? PRESENCE } : {}),
       label,
       ...(found.model ? { model: found.model } : {}),
@@ -189,15 +208,18 @@ export const identify = (host: NetworkHost): NetworkIdentity => {
   return fallback(host);
 };
 
+/** The page a web service names in its `path` record (DNS-SD's own key), else its root. */
+const pathOf = (service: NetworkHost['mdns'][number]): string => /^\/[\w\-./~%]*$/.test(service.txt.path ?? '') ? service.txt.path : '/';
+
 /**
  * The host's own web page at its address now, when it offers one: its HTTP service, or the admin
  * page a printer names. A `.local` name in a printer's is not used, as a browser may not resolve it.
  */
 export const webPageOf = (host: NetworkHost): string | undefined => {
   const http = host.mdns.find((each) => each.type === '_http._tcp');
-  if (http) return `http://${host.ip}${http.port && http.port !== 80 ? `:${http.port}` : ''}/`;
+  if (http) return `http://${host.ip}${http.port && http.port !== 80 ? `:${http.port}` : ''}${pathOf(http)}`;
   const https = host.mdns.find((each) => each.type === '_https._tcp');
-  if (https) return `https://${host.ip}${https.port && https.port !== 443 ? `:${https.port}` : ''}/`;
+  if (https) return `https://${host.ip}${https.port && https.port !== 443 ? `:${https.port}` : ''}${pathOf(https)}`;
   const admin = host.mdns.map((each) => each.txt.adminurl).find((url) => url && /^https?:\/\//.test(url));
   return admin ? `${new URL(admin).protocol}//${host.ip}/` : undefined;
 };

@@ -11,8 +11,9 @@ import { foundDevices, NetworkHosts } from '../lib/network/found.ts';
 import { identify, webPageOf } from '../lib/network/identify.ts';
 import { parseIppResponse, printerAttributesRequest } from '../lib/network/ipp.ts';
 import { decodeCastMessage, encodeCastMessage } from '../lib/network/cast.ts';
-import { changesOf, reach } from '../lib/network/polled.ts';
-import { ippResponse } from './fixtures.ts';
+import { changesOf, createPolledDrivers, reach } from '../lib/network/polled.ts';
+import { ippResponse, startSnmpAgent } from './fixtures.ts';
+import { snmpWalk } from '../lib/network/snmp.ts';
 
 const SEEN = '2026-11-09T08:00:00.000Z';
 
@@ -41,6 +42,15 @@ const printer = host('192.168.1.23', {
 const nas = host('192.168.1.24', {
   ssdp: [{ st: 'upnp:rootdevice', friendlyName: 'Backup box', manufacturer: 'Synology', modelName: 'DS216se' }],
 });
+const readynas = host('192.168.1.27', {
+  names: ['attic-nas.local'],
+  mdns: [
+    { type: '_smb._tcp', instance: 'attic-nas (CIFS)', port: 445, txt: {} },
+    { type: '_http._tcp', instance: 'FrontView on attic-nas', port: 80, txt: { path: '/admin/' } },
+    { type: '_readynas._tcp', instance: 'ReadyNAS Discovery [attic-nas]', port: 9, txt: { vendor: 'NETGEAR', model: 'ReadyNAS Ultra 4', serial: 'TEST0001', channels: '4' } },
+  ],
+});
+const share = host('192.168.1.28', { names: ['old-box.local'], mdns: [{ type: '_afpovertcp._tcp', instance: 'old-box (AFP)', port: 548, txt: {} }] });
 const unknown = host('192.168.1.25', {
   ssdp: [{ st: 'upnp:rootdevice', friendlyName: 'Thing', manufacturer: 'Acme', modelName: 'Widget 2' }],
 });
@@ -69,6 +79,13 @@ Deno.test('identify', async (t) => {
     assertEquals([identify(printer).kind, identify(printer).model, identify(printer).adopt], ['printer', 'Inkjet 7200', 'ipp']);
     assertEquals([identify(nas).kind, identify(nas).label, identify(nas).model, identify(nas).adopt], ['storage', 'Backup box', 'DS216se', 'network']);
   });
+  await t.step('a ReadyNAS is named by its host, with the maker, model and serial its own record gives', () => {
+    const identity = identify(readynas);
+    assertEquals([identity.kind, identity.label, identity.vendor, identity.model, identity.serial], ['storage', 'attic-nas', 'NETGEAR', 'ReadyNAS Ultra 4', 'TEST0001']);
+  });
+  await t.step('a file share is named by its host, not by the share', () => {
+    assertEquals(identify(share).label, 'old-box');
+  });
   await t.step('a Cast speaker is added over Cast', () => {
     const speaker = host('192.168.1.26', { mdns: [{ type: '_googlecast._tcp', instance: 'Google-Home-Mini-1', txt: { fn: 'Kitchen speaker', md: 'Google Home Mini' } }] });
     assertEquals([identify(speaker).kind, identify(speaker).label, identify(speaker).adopt, identify(speaker).class], ['cast', 'Kitchen speaker', 'cast', 'speaker']);
@@ -91,6 +108,7 @@ Deno.test("a host's web page is its HTTP service, else a printer's admin page, a
   assertEquals(webPageOf(host('192.168.1.23', { mdns: [{ type: '_http._tcp', instance: 'x', port: 8080, txt: {} }] })), 'http://192.168.1.23:8080/');
   assertEquals(webPageOf(host('192.168.1.23', { mdns: [{ type: '_ipp._tcp', instance: 'x', txt: { adminurl: 'http://printer.local.' } }] })), 'http://192.168.1.23/');
   assertEquals(webPageOf(nas), undefined);
+  assertEquals(webPageOf(readynas), 'http://192.168.1.27/admin/', 'the page its path record names');
 });
 
 Deno.test('the network listener on the broker', async (t) => {
@@ -220,4 +238,50 @@ Deno.test('a poll announces each endpoint once, and says the device is online', 
   };
   assertEquals(changesOf('printer', polled, new Set()).map((change) => change.kind), ['entity', 'state', 'online']);
   assertEquals(changesOf('printer', polled, new Set(['state'])).map((change) => change.kind), ['state', 'online']);
+});
+
+Deno.test({ name: 'the snmp driver reads a NAS: uptime, load, memory, its volumes and temperatures', sanitizeResources: false, sanitizeOps: false }, async (t) => {
+  const storage = '1.3.6.1.2.1.25.2.3.1';
+  const agent = startSnmpAgent([
+    ['1.3.6.1.2.1.1.1.0', 'string', 'Linux attic-nas 2.6.37 x86_64'],
+    ['1.3.6.1.2.1.1.3.0', 'ticks', 864_000_00],
+    ['1.3.6.1.4.1.2021.10.1.3.1', 'string', '0.42'],
+    // Physical memory (RAM), a volume, and /dev, which is the system's own.
+    [`${storage}.2.1`, 'oid', '1.3.6.1.2.1.25.2.1.2'],
+    [`${storage}.3.1`, 'string', 'Physical memory'],
+    [`${storage}.4.1`, 'int', 1024],
+    [`${storage}.5.1`, 'int', 4_000_000],
+    [`${storage}.6.1`, 'int', 1_000_000],
+    [`${storage}.2.31`, 'oid', '1.3.6.1.2.1.25.2.1.4'],
+    [`${storage}.3.31`, 'string', '/c'],
+    [`${storage}.4.31`, 'int', 4096],
+    [`${storage}.5.31`, 'int', 1_000_000],
+    [`${storage}.6.31`, 'int', 900_000],
+    [`${storage}.2.32`, 'oid', '1.3.6.1.2.1.25.2.1.4'],
+    [`${storage}.3.32`, 'string', '/dev'],
+    [`${storage}.4.32`, 'int', 4096],
+    [`${storage}.5.32`, 'int', 1_000_000],
+    [`${storage}.6.32`, 'int', 0],
+    ['1.3.6.1.4.1.2021.13.16.2.1.2.1', 'string', 'CPU'],
+    ['1.3.6.1.4.1.2021.13.16.2.1.3.1', 'int', 47_500],
+  ]);
+  const port = await agent.ready;
+  try {
+    const snmp = createPolledDrivers(fetch).find((driver) => driver.name === 'snmp')!;
+    await t.step("a poll names each reading once, a volume by its mount, the system's own mounts left out", async () => {
+      const polled = await snmp.poll({ name: 'attic-nas', ip: '127.0.0.1', snmpPort: port });
+      assertEquals(polled.entities.map((each) => each.entity), ['uptime', 'load', 'memory-used', 'c-used', 'c-free', 'cpu-temperature']);
+      assertEquals(polled.values, { uptime: 10, load: 0.42, 'memory-used': 25, 'c-used': 90, 'c-free': 0.4, 'cpu-temperature': 47.5 });
+    });
+    await t.step('a walk answers every object under an OID, across GETBULK batches', async () => {
+      const walked = await snmpWalk({ host: '127.0.0.1', port, community: 'public' }, storage);
+      assertEquals(walked.length, 15);
+      assertEquals(walked[0], { oid: `${storage}.2.1`, type: 'OID', value: '1.3.6.1.2.1.25.2.1.2' });
+    });
+    await t.step('another community is not answered, and says so', async () => {
+      await assertRejects(() => snmp.poll({ name: 'attic-nas', ip: '127.0.0.1', snmpPort: port, community: 'wrong' }), Error, "with the community 'wrong'");
+    });
+  } finally {
+    agent.close();
+  }
 });

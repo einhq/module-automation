@@ -145,6 +145,15 @@
         "label": "Device MQTT password",
         "description": "The password of the device user, given only to a device added from the network.",
         "group": "Automation"
+      },
+      {
+        "key": "CFG_AUTOMATION_SNMP_COMMUNITY",
+        "scope": "system",
+        "type": "string",
+        "default": "public",
+        "label": "SNMP community",
+        "description": "The read-only community EiN asks a device found on the network with when it adds it, and its snmp driver goes on asking it with: public unless the device was set to another.",
+        "group": "Automation"
       }
     ]
   },

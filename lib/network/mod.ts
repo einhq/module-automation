@@ -14,7 +14,8 @@ import { foundDevices, type KnownDevice } from './found.ts';
 import { webPageOf } from './identify.ts';
 
 export { adoptShelly } from './adopt.ts';
-export { createPolledDrivers, POLLED_DRIVERS } from './polled.ts';
+export { answersSnmp, createPolledDrivers, DEFAULT_COMMUNITY, POLLED_DRIVERS } from './polled.ts';
+export { snmpWalk } from './snmp.ts';
 
 /**
  * Throws unless the caller makes devices: the administrator or a member of the devices group. What
@@ -79,12 +80,12 @@ export const readFoundDetail = async (cmd: Command, id: string): Promise<FoundDe
 };
 
 /**
- * Makes `found` a device of a polled driver (`network`, `ipp`, `cast`) under /dev, named after its
- * label, as the administrator, since /dev is theirs. It keeps the host's id, so it follows the host
- * to a new address, and what the host offered that its driver asks on: a printer's IPP port and
- * resource. Answers the device's name.
+ * Makes `found` a device of a polled driver (`network`, `ipp`, `snmp`, `cast`) under /dev, named
+ * after its label, as the administrator, since /dev is theirs. It keeps the host's id, so it follows
+ * the host to a new address, and what its driver asks with: a printer's IPP port and resource, the
+ * SNMP community. Answers the device's name.
  */
-export const addPolledDevice = async (cmd: Command, found: FoundDetail, driver: string): Promise<string> => {
+export const addPolledDevice = async (cmd: Command, found: FoundDetail, driver: string, community?: string): Promise<string> => {
   const manager = cmd.sys.devices;
   if (!manager) throw new Error('devices are not running here');
   const base = deviceName(found.label) || deviceName(found.id) || 'device';
@@ -96,6 +97,7 @@ export const addPolledDevice = async (cmd: Command, found: FoundDetail, driver: 
     ip: found.ip,
     ...(driver === 'ipp' && ipp?.port ? { port: String(ipp.port) } : {}),
     ...(driver === 'ipp' && ipp?.txt.rp ? { path: ipp.txt.rp } : {}),
+    ...(driver === 'snmp' && community ? { community } : {}),
   };
   const attrs: DeviceAttrs = {
     label: found.label,
@@ -104,6 +106,7 @@ export const addPolledDevice = async (cmd: Command, found: FoundDetail, driver: 
     ...(found.vendor ? { manufacturer: found.vendor } : {}),
     ...(found.model ? { model: found.model } : {}),
     ...(found.firmware ? { firmware: found.firmware } : {}),
+    ...(found.serial ? { serial: found.serial } : {}),
     ...(found.mac ? { mac: found.mac } : {}),
     ...(webPageOf(found.host) ? { url: webPageOf(found.host) } : {}),
     config,

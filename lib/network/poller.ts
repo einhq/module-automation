@@ -54,7 +54,14 @@ export const startPoller = (options: PollerOptions): Poller => {
     const ip = host?.ip ?? config.ip;
     if (!ip) return undefined;
     const port = Number(config.port) || host?.mdns.find((each) => each.port)?.port;
-    return { name, ip, ...(port ? { port } : {}), ...(config.path ? { path: config.path } : {}) };
+    return {
+      name,
+      ip,
+      ...(port ? { port } : {}),
+      ...(config.path ? { path: config.path } : {}),
+      ...(config.community ? { community: config.community } : {}),
+      ...(Number(config['snmp-port']) ? { snmpPort: Number(config['snmp-port']) } : {}),
+    };
   };
 
   const ours = async () => {
@@ -115,7 +122,10 @@ export const startPoller = (options: PollerOptions): Poller => {
     devices.registerDriver(driver.name, {
       description: driver.description,
       module: 'automation',
-      config: [{ name: 'ip', label: 'Address on the network', type: 'string', required: true }],
+      config: [
+        { name: 'ip', label: 'Address on the network', type: 'string', required: true },
+        ...(driver.name === 'snmp' ? [{ name: 'community', label: 'SNMP community', type: 'string' as const }] : []),
+      ],
       ...(driver.write
         ? {
           write: async ({ device, endpoint, attrs, value, by }) => {
