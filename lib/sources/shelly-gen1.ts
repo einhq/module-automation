@@ -217,9 +217,12 @@ const commandOf = (id: string, entity: string, value: string, mode: string | und
   if (!light) return undefined;
   const [, part, index, what] = light;
   if (!what) return value === 'on' || value === 'off' ? { topic: `${base}/${part}/${index}/command`, payload: value } : undefined;
-  const set = (params: Record<string, unknown>): Publish => ({ topic: `${base}/${part}/${index}/set`, payload: JSON.stringify(params) });
-  // A Bulb's or Duo RGBW's light is in colour mode or white: a colour is set in colour mode, a
-  // temperature in white.
+  // A light that says its mode is told it with each setting: a Duo RGBW ignores a setting of one
+  // field alone. A colour is set in colour mode, a temperature in white.
+  const set = (params: Record<string, unknown>): Publish => ({
+    topic: `${base}/${part}/${index}/set`,
+    payload: JSON.stringify(mode && !('mode' in params) ? { mode, ...params } : params),
+  });
   if (what === 'color') {
     const rgb = rgbOf(value);
     return rgb ? set({ mode: 'color', red: rgb[0], green: rgb[1], blue: rgb[2] }) : undefined;

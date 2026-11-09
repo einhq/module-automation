@@ -289,7 +289,7 @@ Deno.test('shelly-gen1: a colour light and a roller', async (t) => {
     const name = 'shellycolorbulb-a1b2c3d4e5f7';
     const set = `shellies/${light.id}/color/0/set`;
     assertEquals(source.encode({ device: name, entity: 'color-0', value: 'off' }), [{ topic: `shellies/${light.id}/color/0/command`, payload: 'off' }]);
-    assertEquals(source.encode({ device: name, entity: 'color-0-brightness', value: '50' }), [{ topic: set, payload: JSON.stringify({ gain: 50 }) }]);
+    assertEquals(source.encode({ device: name, entity: 'color-0-brightness', value: '50' }), [{ topic: set, payload: JSON.stringify({ mode: 'color', gain: 50 }) }]);
     assertEquals(source.encode({ device: name, entity: 'color-0-color', value: '#ff0000' }), [{
       topic: set,
       payload: JSON.stringify({ mode: 'color', red: 255, green: 0, blue: 0 }),
@@ -299,7 +299,7 @@ Deno.test('shelly-gen1: a colour light and a roller', async (t) => {
       payload: JSON.stringify({ mode: 'white', temp: 3000 }),
     }]);
     source.decode(light.status.topic, JSON.stringify({ ison: true, mode: 'white', gain: 70, brightness: 30, temp: 3000 }), false);
-    assertEquals(source.encode({ device: name, entity: 'color-0-brightness', value: '50' }), [{ topic: set, payload: JSON.stringify({ brightness: 50 }) }]);
+    assertEquals(source.encode({ device: name, entity: 'color-0-brightness', value: '50' }), [{ topic: set, payload: JSON.stringify({ mode: 'white', brightness: 50 }) }]);
     assertEquals(source.decode(set, JSON.stringify({ gain: 50 }), false), [], 'its own command is not a reading');
   });
 
@@ -310,7 +310,7 @@ Deno.test('shelly-gen1: a colour light and a roller', async (t) => {
     const updates = source.decode(`shellies/${id}/color/0/status`, JSON.stringify(status), true);
     assertEquals(of(updates, 'state').find((state) => state.entity === 'color-0-brightness')?.value, 60);
     const set = `shellies/${id}/color/0/set`;
-    assertEquals(source.encode({ device: id, entity: 'color-0-brightness', value: '80' }), [{ topic: set, payload: JSON.stringify({ brightness: 80 }) }]);
+    assertEquals(source.encode({ device: id, entity: 'color-0-brightness', value: '80' }), [{ topic: set, payload: JSON.stringify({ mode: 'white', brightness: 80 }) }]);
     assertEquals(source.encode({ device: id, entity: 'color-0-color', value: '#ff0000' }), [{
       topic: set,
       payload: JSON.stringify({ mode: 'color', red: 255, green: 0, blue: 0 }),
