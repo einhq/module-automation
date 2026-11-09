@@ -68,9 +68,15 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
   });
   const { size, view, setView } = panZoom;
 
-  // Placed once the box is measured: the whole graph, no larger than full size.
+  /** The nodes as large as fits, no larger than full size: the room round them is for dragging, not fitting. */
+  const fitNodes = () => {
+    const fitted = fitView({ width: content.width - CANVAS_PAD * 2, height: content.height - CANVAS_PAD * 2 }, size, 0.25);
+    return { ...fitted, x: fitted.x - CANVAS_PAD * fitted.scale, y: fitted.y - CANVAS_PAD * fitted.scale };
+  };
+
+  // Placed once the box is measured: the whole graph.
   useLayoutEffect(() => {
-    if (!view && size.width > 0 && size.height > 0) setView(fitView(content, size, 0.25), true);
+    if (!view && size.width > 0 && size.height > 0) setView(fitNodes(), true);
   }, [size, view]);
 
   // The drawing grew or shrank on the left or the top: the view follows, so the nodes stay put.
@@ -125,12 +131,15 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
     const at = panZoom.toDrawing(event.clientX, event.clientY);
     if (at) setLoose({ from, output, x: at.x, y: at.y });
   };
+  // A port's events stay the port's: the card it is on would take its release for a tap.
   const onPortMove = (event: ReactPointerEvent) => {
+    event.stopPropagation();
     if (!loose) return;
     const at = panZoom.toDrawing(event.clientX, event.clientY);
     if (at) setLoose({ ...loose, x: at.x, y: at.y });
   };
   const onPortUp = (event: ReactPointerEvent) => {
+    event.stopPropagation();
     if (!loose) return;
     const target = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-node-id]');
     const to = target?.getAttribute('data-node-id');
@@ -296,7 +305,7 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
       </Box>
       <Stack gap={8} style={{ position: 'absolute', top: 8, right: 8, zIndex: 1 }}>
         <Tooltip label='Fit the whole automation' position='left'>
-          <ActionIcon variant='filled' color='dark' size={36} onClick={() => panZoom.animateTo(fitView(content, size, 0.25), true)} aria-label='Fit the whole automation'>
+          <ActionIcon variant='filled' color='dark' size={36} onClick={() => panZoom.animateTo(fitNodes(), true)} aria-label='Fit the whole automation'>
             <TablerIcon name='zoom-scan' size={18} />
           </ActionIcon>
         </Tooltip>

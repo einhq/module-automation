@@ -55,7 +55,7 @@ function Palette({ onAdd, menu }: { onAdd: (type: string) => void; menu?: boolea
     );
   }
   return (
-    <ScrollArea w={190} h='100%' type='auto' style={{ flex: '0 0 190px', borderRight: '1px solid var(--mantine-color-default-border)' }}>
+    <ScrollArea w={160} h='100%' type='auto' style={{ flex: '0 0 160px', borderRight: '1px solid var(--mantine-color-default-border)' }}>
       <Stack gap={2} p='xs'>
         {GROUPS.map(({ group, label }) => (
           <Box key={group} mb={6}>
@@ -300,7 +300,7 @@ export function AutomationEditor({ name, onChanged }: { name: string; onChanged:
               )}
             </Box>
             {form && !phone && (
-              <ScrollArea w={340} type='auto' style={{ flex: '0 0 340px', borderLeft: '1px solid var(--mantine-color-default-border)' }}>
+              <ScrollArea w={300} type='auto' style={{ flex: '0 0 300px', borderLeft: '1px solid var(--mantine-color-default-border)' }}>
                 <Box p='md'>{form}</Box>
               </ScrollArea>
             )}
