@@ -1,8 +1,25 @@
-import { PageLoader } from '@ein/ui/components';
-import { useCommand } from '@ein/ui/hooks';
+import { CodeMirror, PageLoader } from '@ein/ui/components';
+import { useCommand, useSurface } from '@ein/ui/hooks';
 import { shq } from '@ein/ui/lib';
-import { Alert, Badge, Code, Group, Modal, Stack, Table, Text, Title } from '@mantine/core';
+import { Alert, Badge, Container, Group, Stack, Table, Text, Title } from '@mantine/core';
+import type { ReactNode } from 'react';
+import { useParams } from 'react-router-dom';
 import type { FoundDetail } from '@automation/api';
+
+/** The shell's dialog takes its frame from here, wide for the raw message; as a page, this is its heading. */
+export const handle = { title: 'Found on the network', icon: 'radar', pattern: 'device', dialogSize: 'xl', signedIn: true };
+
+/** As a page, a heading and a width of its own; in the dialog, the dialog's. */
+function Frame({ children }: { children: ReactNode }) {
+  const surface = useSurface();
+  if (surface.kind !== 'page') return <>{children}</>;
+  return (
+    <Container size='md' py='xl'>
+      <Title order={2} mb='lg'>{handle.title}</Title>
+      {children}
+    </Container>
+  );
+}
 
 /** Rows of a key-value table, the empty ones left out. */
 function Pairs({ rows }: { rows: [string, string | number | undefined][] }) {
@@ -23,17 +40,20 @@ function Pairs({ rows }: { rows: [string, string | number | undefined][] }) {
 }
 
 /**
- * Everything the network listener heard of one host, as it came: what EiN makes of it, each mDNS
- * service with its TXT records, each SSDP answer with what its UPnP description says, and the whole
- * message. For a device EiN does not support yet, it is what there is to go on.
+ * Everything the network listener heard of one host (`/found-devices/:id`, opened as a dialog from
+ * a card): what EiN makes of it, each mDNS service with its TXT records, each SSDP answer with what
+ * its UPnP description says, and the whole message, raw. For a device EiN does not support yet, it
+ * is what there is to go on.
  */
-export function FoundDetailModal({ id, onClose }: { id: string; onClose: () => void }) {
+export default function FoundDevicePage() {
+  const { id = '' } = useParams();
   const { data, loading, error } = useCommand<FoundDetail>(`automation-found ${shq(id)}`);
   return (
-    <Modal opened onClose={onClose} size='lg' title={data?.label ?? 'Found on the network'}>
+    <Frame>
       {error && <Alert color='red'>{error.message}</Alert>}
       {loading && !data ? <PageLoader /> : data && (
         <Stack gap='md'>
+          <Title order={4}>{data.label}</Title>
           <Pairs
             rows={[
               ['what it is', data.kind],
@@ -78,10 +98,10 @@ export function FoundDetailModal({ id, onClose }: { id: string; onClose: () => v
               />
             </Stack>
           ))}
-          <Title order={5}>As heard</Title>
-          <Code block style={{ maxHeight: 320, overflow: 'auto' }}>{JSON.stringify(data.host, null, 2)}</Code>
+          <Title order={5}>Raw</Title>
+          <CodeMirror value={JSON.stringify(data.host, null, 2)} language='json' readOnly height='360px' />
         </Stack>
       )}
-    </Modal>
+    </Frame>
   );
 }

@@ -151,7 +151,8 @@
   "ui": {
     "routes": {
       "/found-devices": "ui/pages/found-devices.tsx",
-      "/found-devices-button": "ui/pages/found-devices-button.tsx"
+      "/found-devices-button": "ui/pages/found-devices-button.tsx",
+      "/found-devices/:id": "ui/pages/found-device.tsx"
     }
   }
 }

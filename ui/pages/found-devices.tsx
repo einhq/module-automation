@@ -1,12 +1,11 @@
 import { EmptyState, EntityDetailHeader, HeaderChoice, HeaderFilterBar, HeaderStats, ListFilterInput, PageLoader, TablerIcon } from '@ein/ui/components';
 import { usePersistedState, usePolledCommand, useUrlParam } from '@ein/ui/hooks';
 import { countOf, matchesText, shq } from '@ein/ui/lib';
-import { execCommand, notify } from '@ein/ui/signals';
+import { execCommand, notify, openDialog } from '@ein/ui/signals';
 import { Alert, Badge, Box, Button, Card, Group, SimpleGrid, Stack, Text } from '@mantine/core';
 import { useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import type { AdoptAnswer, FoundAnswer, FoundDevice } from '@automation/api';
-import { FoundDetailModal } from '../components/FoundDetailModal.tsx';
 
 export const handle = { fullBleed: true };
 
@@ -127,20 +126,12 @@ function FoundCard({ found, onChanged, onOpen }: { found: FoundDevice; onChanged
 /**
  * What the network listener found on the network, as the people page's unidentified people: the
  * ones that can become a device first, each with Add where EiN can add it itself and Ignore for the
- * ones no one wants. A card opens everything the listener heard of it (`?host=<id>`).
+ * ones no one wants. A card opens everything the listener heard of it (`/found-devices/:id`) as a
+ * dialog.
  */
 export default function FoundDevicesPage() {
   const [search, setSearch] = useUrlParam('q');
   const [scope, setScope] = usePersistedState<Scope>('found-devices.scope', 'addable');
-  const [params, setParams] = useSearchParams();
-  const open = params.get('host');
-  const setOpen = (id: string | null) =>
-    setParams((current) => {
-      const next = new URLSearchParams(current);
-      if (id) next.set('host', id);
-      else next.delete('host');
-      return next;
-    });
   const { data, loading, error, refetch } = usePolledCommand<FoundAnswer>('automation-found --all');
   const all = useMemo(() => data?.devices ?? [], [data]);
 
@@ -184,7 +175,14 @@ export default function FoundDevicesPage() {
           {loading && !data ? <PageLoader /> : (
             <>
               <SimpleGrid cols={{ base: 1, xs: 2, md: 3, lg: 4 }}>
-                {shown.map((found) => <FoundCard key={found.id} found={found} onChanged={refetch} onOpen={() => setOpen(found.id)} />)}
+                {shown.map((found) => (
+                  <FoundCard
+                    key={found.id}
+                    found={found}
+                    onChanged={refetch}
+                    onOpen={() => openDialog(`/found-devices/${encodeURIComponent(found.id)}`)}
+                  />
+                ))}
               </SimpleGrid>
               {data && shown.length === 0 && (
                 <EmptyState title={scope === 'addable' ? 'Nothing to add' : 'Nothing found'}>
@@ -197,7 +195,6 @@ export default function FoundDevicesPage() {
           )}
         </Stack>
       </Box>
-      {open && <FoundDetailModal id={open} onClose={() => setOpen(null)} />}
     </Box>
   );
 }
