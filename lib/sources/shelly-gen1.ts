@@ -9,7 +9,7 @@
  *   shellies/<id>/relay/<n>/power                the power drawn, W
  *   shellies/<id>/relay/<n>/energy               the energy drawn since it last started, watt-minutes
  *   shellies/<id>/light/<n>                      a light, on or off (also color/<n> and white/<n>)
- *   shellies/<id>/light/<n>/status               its brightness, colour and temperature, as JSON
+ *   shellies/<id>/light/<n>/status               its mode, brightness, colour and temperature, as JSON
  *   shellies/<id>/roller/<n>                     a roller's state: open, close or stop
  *   shellies/<id>/roller/<n>/pos                 where it is, 0–100 %, or -1 when it does not know
  *   shellies/<id>/temperature                    its own temperature, °C
@@ -78,11 +78,15 @@ const field = (name: string) => (payload: string): number | undefined => {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 };
 
-/** The parts of a light that say what they are: `light` (Dimmer, Bulb Duo, Duo RGBW), `color` and `white` (Bulb, RGBW2). */
+/** The parts a light is said under: `light` (Dimmer, Duo, Vintage), `color` and `white` (Bulb, Duo RGBW, RGBW2). */
 const LIGHTS = new Set(['light', 'color', 'white']);
 
-/** A light's brightness, which a light in colour mode calls its gain. */
-const brightnessOf = (status: Record<string, unknown>, part: string): unknown => part === 'color' || status.mode === 'color' ? status.gain : status.brightness ?? status.gain;
+/**
+ * Which field is a light's brightness: in colour mode its gain, in white mode its brightness, and
+ * when it does not say its mode, the gain of a `color` light (an RGBW2) and the brightness of another.
+ */
+const brightnessField = (part: string, mode: unknown): 'gain' | 'brightness' =>
+  mode === 'color' ? 'gain' : mode === 'white' ? 'brightness' : part === 'color' ? 'gain' : 'brightness';
 
 /** What a light's JSON status (`light/0/status`, `color/0/status`) holds, each with what it reads. */
 const lightReadings = (part: string, light: string): Found[] => [
@@ -98,7 +102,7 @@ const lightReadings = (part: string, light: string): Found[] => [
       settable: true,
       value: (p) => {
         const status = parse(p);
-        const value = status ? brightnessOf(status, part) : undefined;
+        const value = status ? status[brightnessField(part, status.mode)] : undefined;
         return typeof value === 'number' ? value : undefined;
       },
     },
@@ -214,16 +218,16 @@ const commandOf = (id: string, entity: string, value: string, mode: string | und
   const [, part, index, what] = light;
   if (!what) return value === 'on' || value === 'off' ? { topic: `${base}/${part}/${index}/command`, payload: value } : undefined;
   const set = (params: Record<string, unknown>): Publish => ({ topic: `${base}/${part}/${index}/set`, payload: JSON.stringify(params) });
+  // A Bulb's or Duo RGBW's light is in colour mode or white: a colour is set in colour mode, a
+  // temperature in white.
   if (what === 'color') {
     const rgb = rgbOf(value);
-    if (!rgb) return undefined;
-    // A Duo RGBW's light is in colour mode or white; a colour is set in colour mode.
-    return set({ ...(part === 'light' ? { mode: 'color' } : {}), red: rgb[0], green: rgb[1], blue: rgb[2] });
+    return rgb ? set({ mode: 'color', red: rgb[0], green: rgb[1], blue: rgb[2] }) : undefined;
   }
   const amount = number(value);
   if (amount === undefined) return undefined;
-  if (what === 'brightness') return set(part === 'color' || mode === 'color' ? { gain: amount } : { brightness: amount });
-  return set(what === 'white' ? { white: amount } : { temp: amount });
+  if (what === 'brightness') return set({ [brightnessField(part, mode)]: amount });
+  return set(what === 'white' ? { white: amount } : { mode: 'white', temp: amount });
 };
 
 /** The JSON object in a payload, or undefined. */

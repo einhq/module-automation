@@ -264,20 +264,22 @@ Deno.test('shelly-gen1: a colour light and a roller', async (t) => {
   await t.step('a light in colour mode has its gain as its brightness, its colour and its temperature', () => {
     const source = createShellyGen1();
     assertEquals(of(source.decode(light.light.topic, light.light.payload, true), 'entity').map((entity) => [entity.entity, entity.entityKind, entity.settable]), [[
-      'light-0',
+      'color-0',
       'light',
       true,
     ]]);
     const updates = source.decode(light.status.topic, light.status.payload, true);
     assertEquals(of(updates, 'entity').map((entity) => [entity.entity, entity.entityKind, entity.settable]), [
-      ['light-0-brightness', 'number', true],
-      ['light-0-color', 'text', true],
-      ['light-0-color-temperature', 'number', true],
+      ['color-0-brightness', 'number', true],
+      ['color-0-color', 'text', true],
+      ['color-0-white', 'number', true],
+      ['color-0-color-temperature', 'number', true],
     ]);
     assertEquals(of(updates, 'state').map((state) => [state.entity, state.value]), [
-      ['light-0-brightness', 70],
-      ['light-0-color', '#0080ff'],
-      ['light-0-color-temperature', 4750],
+      ['color-0-brightness', 70],
+      ['color-0-color', '#0080ff'],
+      ['color-0-white', 0],
+      ['color-0-color-temperature', 4750],
     ]);
   });
 
@@ -285,17 +287,34 @@ Deno.test('shelly-gen1: a colour light and a roller', async (t) => {
     const source = createShellyGen1();
     source.decode(light.status.topic, light.status.payload, true);
     const name = 'shellycolorbulb-a1b2c3d4e5f7';
-    const set = `shellies/${light.id}/light/0/set`;
-    assertEquals(source.encode({ device: name, entity: 'light-0', value: 'off' }), [{ topic: `shellies/${light.id}/light/0/command`, payload: 'off' }]);
-    assertEquals(source.encode({ device: name, entity: 'light-0-brightness', value: '50' }), [{ topic: set, payload: JSON.stringify({ gain: 50 }) }]);
-    assertEquals(source.encode({ device: name, entity: 'light-0-color', value: '#ff0000' }), [{
+    const set = `shellies/${light.id}/color/0/set`;
+    assertEquals(source.encode({ device: name, entity: 'color-0', value: 'off' }), [{ topic: `shellies/${light.id}/color/0/command`, payload: 'off' }]);
+    assertEquals(source.encode({ device: name, entity: 'color-0-brightness', value: '50' }), [{ topic: set, payload: JSON.stringify({ gain: 50 }) }]);
+    assertEquals(source.encode({ device: name, entity: 'color-0-color', value: '#ff0000' }), [{
       topic: set,
       payload: JSON.stringify({ mode: 'color', red: 255, green: 0, blue: 0 }),
     }]);
-    assertEquals(source.encode({ device: name, entity: 'light-0-color-temperature', value: '3000' }), [{ topic: set, payload: JSON.stringify({ temp: 3000 }) }]);
-    source.decode(light.status.topic, JSON.stringify({ ison: true, mode: 'white', brightness: 30, temp: 3000 }), false);
-    assertEquals(source.encode({ device: name, entity: 'light-0-brightness', value: '50' }), [{ topic: set, payload: JSON.stringify({ brightness: 50 }) }]);
+    assertEquals(source.encode({ device: name, entity: 'color-0-color-temperature', value: '3000' }), [{
+      topic: set,
+      payload: JSON.stringify({ mode: 'white', temp: 3000 }),
+    }]);
+    source.decode(light.status.topic, JSON.stringify({ ison: true, mode: 'white', gain: 70, brightness: 30, temp: 3000 }), false);
+    assertEquals(source.encode({ device: name, entity: 'color-0-brightness', value: '50' }), [{ topic: set, payload: JSON.stringify({ brightness: 50 }) }]);
     assertEquals(source.decode(set, JSON.stringify({ gain: 50 }), false), [], 'its own command is not a reading');
+  });
+
+  await t.step('a Duo RGBW says its light under color/0 in white mode too, where its brightness is its brightness', () => {
+    const source = createShellyGen1();
+    const id = 'shellycolorbulb-3494546b0000';
+    const status = { ison: false, mode: 'white', red: 255, green: 255, blue: 255, white: 0, gain: 100, temp: 4750, brightness: 60, effect: 0, transition: 0 };
+    const updates = source.decode(`shellies/${id}/color/0/status`, JSON.stringify(status), true);
+    assertEquals(of(updates, 'state').find((state) => state.entity === 'color-0-brightness')?.value, 60);
+    const set = `shellies/${id}/color/0/set`;
+    assertEquals(source.encode({ device: id, entity: 'color-0-brightness', value: '80' }), [{ topic: set, payload: JSON.stringify({ brightness: 80 }) }]);
+    assertEquals(source.encode({ device: id, entity: 'color-0-color', value: '#ff0000' }), [{
+      topic: set,
+      payload: JSON.stringify({ mode: 'color', red: 255, green: 0, blue: 0 }),
+    }]);
   });
 
   await t.step('a roller has its state, a position it does not know yet, and open, close and stop', () => {

@@ -182,9 +182,9 @@ export const shellyCover = {
 /** A first generation Duo RGBW in colour mode and a 2.5 in roller mode, with invented ids. */
 export const shellyGen1Light = {
   id: 'shellycolorbulb-a1b2c3d4e5f7',
-  light: { topic: 'shellies/shellycolorbulb-a1b2c3d4e5f7/light/0', payload: 'on' },
+  light: { topic: 'shellies/shellycolorbulb-a1b2c3d4e5f7/color/0', payload: 'on' },
   status: {
-    topic: 'shellies/shellycolorbulb-a1b2c3d4e5f7/light/0/status',
+    topic: 'shellies/shellycolorbulb-a1b2c3d4e5f7/color/0/status',
     payload: JSON.stringify({ ison: true, mode: 'color', red: 0, green: 128, blue: 255, white: 0, gain: 70, brightness: 30, temp: 4750, effect: 0 }),
   },
 };
