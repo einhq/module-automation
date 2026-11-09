@@ -13,6 +13,7 @@ const esphomeDevice = {
   mdl: 'esp32dev',
   mf: 'Espressif',
   cns: [['mac', 'a4cf12000001']],
+  cu: 'http://192.0.2.22',
 };
 
 /** The hall sensor's announcements, retained as ESPHome sends them. */

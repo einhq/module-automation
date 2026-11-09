@@ -8,7 +8,7 @@ import { assertEquals, assertRejects, assertThrows } from '@std/assert';
 import type { NetworkHost } from '../lib/api.ts';
 import { adoptShelly, type Fetch } from '../lib/network/adopt.ts';
 import { foundDevices, NetworkHosts } from '../lib/network/found.ts';
-import { identify } from '../lib/network/identify.ts';
+import { identify, webPageOf } from '../lib/network/identify.ts';
 import { parseIppResponse, printerAttributesRequest } from '../lib/network/ipp.ts';
 import { decodeCastMessage, encodeCastMessage } from '../lib/network/cast.ts';
 import { changesOf, reach } from '../lib/network/polled.ts';
@@ -84,6 +84,13 @@ Deno.test('identify', async (t) => {
       model: 'Widget 2',
     });
   });
+});
+
+Deno.test("a host's web page is its HTTP service, else a printer's admin page, at its address", () => {
+  assertEquals(webPageOf(shellyPlus), 'http://192.168.1.20/');
+  assertEquals(webPageOf(host('192.168.1.23', { mdns: [{ type: '_http._tcp', instance: 'x', port: 8080, txt: {} }] })), 'http://192.168.1.23:8080/');
+  assertEquals(webPageOf(host('192.168.1.23', { mdns: [{ type: '_ipp._tcp', instance: 'x', txt: { adminurl: 'http://printer.local.' } }] })), 'http://192.168.1.23/');
+  assertEquals(webPageOf(nas), undefined);
 });
 
 Deno.test('the network listener on the broker', async (t) => {

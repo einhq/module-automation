@@ -2,8 +2,8 @@
  * Runs the polled drivers (`polled.ts`) in the bridge: registers each with core, and asks each of
  * their devices under /dev as often as its driver says, one device at a time. A device follows its
  * host on the network: its `config.found` is the id the network listener knows it by, so a new
- * address from DHCP is the one asked; `config.ip` is the address it was last at, and the one a
- * person gives with `device-create --driver network --config ip=…`.
+ * address from DHCP is the one asked, and its web page (`url`) follows it; `config.ip` is the address
+ * it was last at, and the one a person gives with `device-create --driver network --config ip=…`.
  */
 
 import type { DeviceAttrs } from '@ein/api';
@@ -11,6 +11,7 @@ import { ADMIN_ACCESS, type Command, type ModuleDevices } from '@ein/client';
 import { DEV_PATH } from '@ein/paths';
 import type { DeviceWriter } from '../drivers.ts';
 import type { NetworkHosts } from './found.ts';
+import { webPageOf } from './identify.ts';
 import { changesOf, type PolledDevice, type PolledDriver } from './polled.ts';
 
 type PollerOptions = {
@@ -75,7 +76,11 @@ export const startPoller = (options: PollerOptions): Poller => {
       const known = announced.get(name)!;
       for (const change of changesOf(name, polled, known)) await writer.apply(change, driver.name);
       for (const each of polled.entities) known.add(each.entity);
-      if (where.ip !== attrs.config?.ip) await devices.ensureDevice(cmd.access, name, { config: { ...attrs.config, ip: where.ip } });
+      const host = attrs.config?.found ? network.hosts.get(attrs.config.found) : undefined;
+      const url = host ? webPageOf(host) : attrs.url;
+      if (where.ip !== attrs.config?.ip || url !== attrs.url) {
+        await devices.ensureDevice(cmd.access, name, { config: { ...attrs.config, ip: where.ip }, ...(url ? { url } : {}) });
+      }
       silent.delete(name);
     } catch (error) {
       if (!silent.has(name)) log(`${name}: ${message(error)}`);

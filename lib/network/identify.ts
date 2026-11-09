@@ -190,6 +190,19 @@ export const identify = (host: NetworkHost): NetworkIdentity => {
 };
 
 /**
+ * The host's own web page at its address now, when it offers one: its HTTP service, or the admin
+ * page a printer names. A `.local` name in a printer's is not used, as a browser may not resolve it.
+ */
+export const webPageOf = (host: NetworkHost): string | undefined => {
+  const http = host.mdns.find((each) => each.type === '_http._tcp');
+  if (http) return `http://${host.ip}${http.port && http.port !== 80 ? `:${http.port}` : ''}/`;
+  const https = host.mdns.find((each) => each.type === '_https._tcp');
+  if (https) return `https://${host.ip}${https.port && https.port !== 443 ? `:${https.port}` : ''}/`;
+  const admin = host.mdns.map((each) => each.txt.adminurl).find((url) => url && /^https?:\/\//.test(url));
+  return admin ? `${new URL(admin).protocol}//${host.ip}/` : undefined;
+};
+
+/**
  * The names under /dev the host could have as a device: its mDNS host names and instances, which
  * Shelly's and ESPHome's MQTT names are made from.
  */

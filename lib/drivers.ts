@@ -173,6 +173,7 @@ export class DeviceWriter {
       model: update.model,
       firmware: update.firmware,
       mac: update.mac,
+      url: update.url,
     });
     const { label: _label, ...kept } = attrs;
     if (!was || changes(was, kept)) await this.options.devices.ensureDevice(this.access, update.device, attrs);

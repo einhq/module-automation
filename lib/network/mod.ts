@@ -11,6 +11,7 @@ import { gidOf } from '../groups.ts';
 import { NETWORK_IGNORED } from '../paths.ts';
 import { bridgeState } from '../state.ts';
 import { foundDevices, type KnownDevice } from './found.ts';
+import { webPageOf } from './identify.ts';
 
 export { adoptShelly } from './adopt.ts';
 export { createPolledDrivers, POLLED_DRIVERS } from './polled.ts';
@@ -104,6 +105,7 @@ export const addPolledDevice = async (cmd: Command, found: FoundDetail, driver: 
     ...(found.model ? { model: found.model } : {}),
     ...(found.firmware ? { firmware: found.firmware } : {}),
     ...(found.mac ? { mac: found.mac } : {}),
+    ...(webPageOf(found.host) ? { url: webPageOf(found.host) } : {}),
     config,
   };
   await manager.ensureDevice(ADMIN_ACCESS, name, attrs);

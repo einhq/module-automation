@@ -174,6 +174,17 @@ export const createShelly = (options: ShellyOptions): MqttSource => {
   const sysUpdates = (device: string, prefix: string, sys: Json): Update[] =>
     typeof sys.mac === 'string' ? [{ kind: 'device', device, label: prefix, mac: sys.mac.toLowerCase() }] : [];
 
+  /** Its web page, at the address its Wi-Fi says it has. */
+  const wifiUpdates = (device: string, prefix: string, wifi: Json): Update[] =>
+    typeof wifi.sta_ip === 'string' && wifi.sta_ip ? [{ kind: 'device', device, label: prefix, url: `http://${wifi.sta_ip}/` }] : [];
+
+  /** What one component's status says, the device's own (`sys`, `wifi`) included. */
+  const componentUpdates = (device: string, prefix: string, key: string, status: Json, retained: boolean): Update[] => [
+    ...(key === 'sys' ? sysUpdates(device, prefix, status) : []),
+    ...(key === 'wifi' ? wifiUpdates(device, prefix, status) : []),
+    ...statusUpdates(device, key, status, retained),
+  ];
+
   const notify = (prefix: string, message: Json, retained: boolean): Update[] => {
     const updates: Update[] = [];
     const device = deviceOf(prefix, updates);
@@ -181,9 +192,7 @@ export const createShelly = (options: ShellyOptions): MqttSource => {
     const params = isObject(message.params) ? message.params : {};
     if (message.method === 'NotifyStatus' || message.method === 'NotifyFullStatus') {
       for (const [key, status] of Object.entries(params)) {
-        if (!isObject(status)) continue;
-        if (key === 'sys') updates.push(...sysUpdates(device, prefix, status));
-        updates.push(...statusUpdates(device, key, status, retained));
+        if (isObject(status)) updates.push(...componentUpdates(device, prefix, key, status, retained));
       }
     } else if (message.method === 'NotifyEvent' && !retained) {
       for (const event of Array.isArray(params.events) ? params.events : []) {
@@ -222,7 +231,7 @@ export const createShelly = (options: ShellyOptions): MqttSource => {
       }];
     }
     if (asked.method === 'Shelly.GetStatus') {
-      return Object.entries(result).flatMap(([key, status]) => isObject(status) ? statusUpdates(device, key, status, false) : []);
+      return Object.entries(result).flatMap(([key, status]) => isObject(status) ? componentUpdates(device, asked.prefix, key, status, false) : []);
     }
     return [];
   };
@@ -268,8 +277,7 @@ export const createShelly = (options: ShellyOptions): MqttSource => {
         const updates: Update[] = [];
         const device = deviceOf(parts[0], updates);
         if (!device) return [];
-        if (parts[2] === 'sys') updates.push(...sysUpdates(device, parts[0], status));
-        return [...updates, ...statusUpdates(device, parts[2], status, retained)];
+        return [...updates, ...componentUpdates(device, parts[0], parts[2], status, retained)];
       }
       if (parts.length === 3 && parts[1] === 'events' && parts[2] === 'rpc') {
         const message = parse(payload);

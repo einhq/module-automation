@@ -32,6 +32,8 @@ export type DeviceUpdate = {
   model?: string;
   firmware?: string;
   mac?: string;
+  /** Its own web page. */
+  url?: string;
 };
 
 /** An entity of a device was announced. */

@@ -25,6 +25,7 @@ const ABBREVIATIONS: Record<string, string> = {
   avty_t: 'availability_topic',
   cmd_t: 'command_topic',
   cns: 'connections',
+  cu: 'configuration_url',
   dev: 'device',
   dev_cla: 'device_class',
   ent_cat: 'entity_category',
@@ -172,6 +173,7 @@ export const createHaDiscovery = (options: HaDiscoveryOptions = {}): MqttSource 
         model: str(deviceInfo.model),
         firmware: str(deviceInfo.sw_version),
         mac: typeof mac === 'string' ? mac.toLowerCase() : undefined,
+        url: /^https?:\/\//.test(str(deviceInfo.configuration_url) ?? '') ? str(deviceInfo.configuration_url) : undefined,
       });
     }
 

@@ -15,15 +15,16 @@ Deno.test('ha-discovery: an ESPHome sensor', async (t) => {
   const source = createHaDiscovery();
   const announced = esphomeConfigs.flatMap((message) => source.decode(message.topic, message.payload, true));
 
-  await t.step('is a device named by its node id, with its maker and MAC', () => {
+  await t.step('is a device named by its node id, with its maker, MAC and web page', () => {
     const device = of(announced, 'device')[0];
-    assertEquals([device.device, device.label, device.manufacturer, device.model, device.firmware, device.mac], [
+    assertEquals([device.device, device.label, device.manufacturer, device.model, device.firmware, device.mac, device.url], [
       'hall-sensor',
       'hall-sensor',
       'Espressif',
       'esp32dev',
       '2025.10.0 (ESPHome)',
       'a4cf12000001',
+      'http://192.0.2.22',
     ]);
   });
 
@@ -164,6 +165,11 @@ Deno.test('shelly: a plug and a four-button input', async (t) => {
     assertEquals(of(source.decode('hall-plug/online', 'false', true), 'online'), [{ kind: 'online', device: 'hall-plug', online: false }]);
   });
 
+  await t.step('its Wi-Fi status says where its web page is', () => {
+    const updates = source.decode('hall-plug/status/wifi', JSON.stringify({ sta_ip: '192.0.2.20', status: 'got ip', rssi: -60 }), true);
+    assertEquals(of(updates, 'device').map((device) => device.url), ['http://192.0.2.20/']);
+  });
+
   await t.step('a press is a button entity and an event; a retained one is not', () => {
     const updates = source.decode(shellyButton.press.topic, shellyButton.press.payload, false);
     assertEquals(of(updates, 'entity').map((entity) => [entity.device, entity.entity, entity.entityKind]), [['porch-button', 'input-0', 'button']]);
@@ -192,7 +198,7 @@ Deno.test('shelly-gen1: a first generation plug', async (t) => {
   const plug = shellyGen1Plug;
   const device = 'shellyplug-s-a1b2c3d4e5f6';
 
-  await t.step('its announcement makes it a device, with its model, firmware and MAC', () => {
+  await t.step('its announcement makes it a device, with its model, firmware, MAC and web page', () => {
     const source = createShellyGen1();
     const updates = source.decode(plug.announce.topic, plug.announce.payload, false);
     assertEquals(of(updates, 'device'), [{
@@ -203,6 +209,7 @@ Deno.test('shelly-gen1: a first generation plug', async (t) => {
       model: 'Plug S',
       firmware: '20221027-101131/v1.12.1-ga9117d3',
       mac: 'a1:b2:c3:d4:e5:f6',
+      url: 'http://192.0.2.10/',
     }]);
     assertEquals(of(updates, 'publish'), [], 'one that announced is not asked to');
   });

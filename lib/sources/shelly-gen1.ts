@@ -142,6 +142,7 @@ export const createShellyGen1 = (): MqttSource => {
       ...(model ? { model: MODELS[model] ?? model } : {}),
       ...(typeof info.fw_ver === 'string' ? { firmware: info.fw_ver } : {}),
       ...(typeof info.mac === 'string' ? { mac: info.mac.toLowerCase().match(/.{2}/g)!.join(':') } : {}),
+      ...(typeof info.ip === 'string' && info.ip ? { url: `http://${info.ip}/` } : {}),
     });
     return updates;
   };
