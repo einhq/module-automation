@@ -1,6 +1,6 @@
 import { CodeMirror, PageLoader } from '@ein/ui/components';
 import { useCommand, useSurface } from '@ein/ui/hooks';
-import { shq } from '@ein/ui/lib';
+import { formatDateTime, shq } from '@ein/ui/lib';
 import { Alert, Badge, Container, Group, Stack, Table, Text, Title } from '@mantine/core';
 import type { ReactNode } from 'react';
 import { useParams } from 'react-router-dom';
@@ -63,7 +63,7 @@ export default function FoundDevicePage() {
               ['address', data.ip],
               ['hardware address', data.mac],
               ['names', data.names.join(', ')],
-              ['last heard', new Date(data.seen).toLocaleString()],
+              ['last heard', formatDateTime(data.seen)],
               ['added with', data.adopt],
               ['device', data.device],
             ]}
