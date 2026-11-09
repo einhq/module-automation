@@ -13,3 +13,5 @@ export const RULES_LOG = '/var/logs/automation/rules';
 export const RULES_QUEUE = '/var/queues/automation-rules';
 /** Every device's readings, presses and coming and going, as core's devices publish them. */
 export const RULES_KEYS = ['dev.#'];
+/** The hosts on the network no one wants as devices, one id (`automation-found`) a line. */
+export const NETWORK_IGNORED = '/etc/automation/network-ignored';

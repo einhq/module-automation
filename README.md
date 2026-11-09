@@ -8,6 +8,15 @@ for queues and logs to take, and a value written to a control (`echo on > /dev/h
 is sent to the device. The `automation-rules` service runs the rules under `/etc/automation/rules`
 when a reading, a press, a device coming or going or the clock says so.
 
+Devices that are on the network but not yet on the broker are found too. A listener beside the
+broker on the host's own network (EiN's deployment runs it with the broker) asks mDNS and SSDP
+what is there and publishes each address it heard as a retained message under
+`ein/discovery/host/<id>`, with its own `ein/discovery/status`. The bridge keeps those:
+`automation-found` names each one (a Shelly, ESPHome, a HomeKit or Matter accessory, a Hue bridge,
+a speaker, a printer, …) and says whether it is a device already, `automation-adopt` points a
+Shelly's MQTT at the broker and restarts it so its driver takes it, and `automation-ignore` leaves
+one out. The Devices page shows how many can be added, and opens them as a page of their own.
+
 The devices, their pages and the device commands are EiN core's; this module brings the drivers and
 the rules.
 

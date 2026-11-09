@@ -6,6 +6,8 @@
  * one rules service per process; nothing here is persisted.
  */
 
+import type { NetworkHosts } from './network/found.ts';
+
 export type BridgeState = {
   url: string;
   /** The drivers it registered, one per source. */
@@ -16,6 +18,8 @@ export type BridgeState = {
   lastError?: string;
   /** Entities the drivers cannot read, as `<device>/<entity>: why`. */
   notes(): string[];
+  /** What the network listener heard, on the same broker. */
+  network: NetworkHosts;
 };
 
 let running: BridgeState | undefined;

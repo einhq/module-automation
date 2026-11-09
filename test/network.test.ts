@@ -1,0 +1,139 @@
+/**
+ * What the network listener's hosts are named as, how they are matched to devices under /dev, and
+ * what adopting a Shelly sends it: pure, no broker and no network.
+ */
+
+import { assertEquals, assertRejects } from '@std/assert';
+import type { NetworkHost } from '../lib/api.ts';
+import { adoptShelly, type Fetch } from '../lib/network/adopt.ts';
+import { foundDevices, NetworkHosts } from '../lib/network/found.ts';
+import { identify } from '../lib/network/identify.ts';
+
+const SEEN = '2026-11-09T08:00:00.000Z';
+
+const host = (ip: string, more: Partial<NetworkHost>): NetworkHost => ({ ip, names: [], seen: SEEN, mdns: [], ssdp: [], ...more });
+
+const shellyPlus = host('192.168.1.20', {
+  mac: 'a8:03:2a:b1:23:45',
+  names: ['shellyplus1pm-a8032ab12345.local'],
+  mdns: [
+    { type: '_shelly._tcp', instance: 'shellyplus1pm-a8032ab12345', port: 80, txt: { gen: '2', app: 'Plus1PM', ver: '1.4.4' } },
+    { type: '_http._tcp', instance: 'shellyplus1pm-a8032ab12345', port: 80, txt: { gen: '2' } },
+  ],
+});
+const shellyGen1 = host('192.168.1.21', {
+  names: ['shellyplug-s-c45bbe000001.local'],
+  mdns: [{ type: '_http._tcp', instance: 'shellyplug-s-C45BBE000001', port: 80, txt: {} }],
+});
+const esphome = host('192.168.1.22', {
+  names: ['hall-sensor.local'],
+  mdns: [{ type: '_esphomelib._tcp', instance: 'hall-sensor', port: 6053, txt: { friendly_name: 'Hall sensor', board: 'esp32dev', version: '2025.10.0' } }],
+});
+const printer = host('192.168.1.23', {
+  names: ['printer.local'],
+  mdns: [{ type: '_ipp._tcp', instance: 'Office printer', port: 631, txt: { ty: 'Inkjet 7200' } }],
+});
+const nas = host('192.168.1.24', {
+  ssdp: [{ st: 'upnp:rootdevice', friendlyName: 'Backup box', manufacturer: 'Synology', modelName: 'DS216se' }],
+});
+const unknown = host('192.168.1.25', {
+  ssdp: [{ st: 'upnp:rootdevice', friendlyName: 'Thing', manufacturer: 'Acme', modelName: 'Widget 2' }],
+});
+
+Deno.test('identify', async (t) => {
+  await t.step('a Shelly of the second generation is one adopt points at the broker', () => {
+    const identity = identify(shellyPlus);
+    assertEquals([identity.kind, identity.vendor, identity.model, identity.firmware, identity.addable, identity.adopt], [
+      'shelly',
+      'Shelly',
+      'Plus1PM',
+      '1.4.4',
+      true,
+      'shelly',
+    ]);
+  });
+  await t.step('one of the first is known by its HTTP service alone', () => {
+    const identity = identify(shellyGen1);
+    assertEquals([identity.kind, identity.model, identity.adopt], ['shelly-gen1', 'shellyplug-s', 'shelly-gen1']);
+  });
+  await t.step('ESPHome can be added by hand, with its friendly name', () => {
+    const identity = identify(esphome);
+    assertEquals([identity.kind, identity.label, identity.model, identity.addable, identity.adopt], ['esphome', 'Hall sensor', 'esp32dev', true, undefined]);
+  });
+  await t.step('a printer and a NAS are named, and are no devices of automation', () => {
+    assertEquals([identify(printer).kind, identify(printer).model, identify(printer).addable], ['printer', 'Inkjet 7200', false]);
+    assertEquals([identify(nas).kind, identify(nas).label, identify(nas).model], ['storage', 'Backup box', 'DS216se']);
+  });
+  await t.step('what no pattern knows is named from its UPnP description', () => {
+    assertEquals(identify(unknown), { kind: 'other', addable: false, vendor: 'Acme', label: 'Thing', model: 'Widget 2' });
+  });
+});
+
+Deno.test('the network listener on the broker', async (t) => {
+  const network = new NetworkHosts();
+  const say = (id: string, value: NetworkHost | '') => network.hear(`ein/discovery/host/${id}`, value === '' ? '' : JSON.stringify(value));
+
+  await t.step('keeps each host by its id, and the listener status', () => {
+    assertEquals(say('a8032ab12345', shellyPlus), true);
+    say('192.168.1.22', esphome);
+    say('192.168.1.23', printer);
+    network.hear('ein/discovery/status', JSON.stringify({ round: SEEN, hosts: 3, broker: '192.168.1.2:1883' }));
+    assertEquals([...network.hosts.keys()], ['a8032ab12345', '192.168.1.22', '192.168.1.23']);
+    assertEquals(network.status, { round: SEEN, broker: '192.168.1.2:1883' });
+  });
+
+  await t.step('lets a host go on an empty message, and leaves the others’ topics alone', () => {
+    say('192.168.1.23', '');
+    assertEquals(network.hosts.has('192.168.1.23'), false);
+    assertEquals(network.hear('shellies/plug/relay/0', 'on'), false);
+  });
+
+  await t.step('matches hosts to devices by hardware address or by the name they answer to', () => {
+    const found = foundDevices(network, [{ name: 'shellyplus1pm-a8032ab12345' }, { name: 'other', mac: 'A4CF12000001' }], new Set());
+    assertEquals(found.broker, '192.168.1.2:1883');
+    assertEquals(found.devices.map((each) => [each.id, each.device]), [['192.168.1.22', undefined], ['a8032ab12345', 'shellyplus1pm-a8032ab12345']]);
+    const byMac = foundDevices(network, [{ name: 'plus', mac: 'A8-03-2A-B1-23-45' }], new Set(['192.168.1.22']));
+    assertEquals(byMac.devices.map((each) => [each.id, each.device, each.ignored]), [['192.168.1.22', undefined, true], ['a8032ab12345', 'plus', false]]);
+  });
+});
+
+Deno.test('adoptShelly', async (t) => {
+  const broker = { address: '192.168.1.2:1883', user: 'device', password: 'secret' };
+  const recorder = (status = 200) => {
+    const asked: { url: string; body?: unknown }[] = [];
+    const fetcher: Fetch = (url, init) => {
+      asked.push({ url, ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
+      return Promise.resolve(new Response(JSON.stringify({ id: 1, result: { restart_required: true } }), { status }));
+    };
+    return { asked, fetcher };
+  };
+
+  await t.step('the second generation: Mqtt.SetConfig with notifications on, then a restart', async () => {
+    const { asked, fetcher } = recorder();
+    await adoptShelly(fetcher, '192.168.1.20', 'shelly', broker);
+    assertEquals(asked.map((each) => (each.body as { method: string }).method), ['Mqtt.SetConfig', 'Shelly.Reboot']);
+    assertEquals((asked[0].body as { params: { config: Record<string, unknown> } }).params.config, {
+      enable: true,
+      server: '192.168.1.2:1883',
+      user: 'device',
+      pass: 'secret',
+      rpc_ntf: true,
+      status_ntf: true,
+      enable_control: true,
+    });
+  });
+
+  await t.step('the first: its settings over a query, then a restart', async () => {
+    const { asked, fetcher } = recorder();
+    await adoptShelly(fetcher, '192.168.1.21', 'shelly-gen1', broker);
+    assertEquals(asked.map((each) => each.url), [
+      'http://192.168.1.21/settings?mqtt_enable=true&mqtt_server=192.168.1.2%3A1883&mqtt_user=device&mqtt_pass=secret',
+      'http://192.168.1.21/reboot',
+    ]);
+  });
+
+  await t.step('a Shelly with a password of its own is refused, saying so', async () => {
+    const { fetcher } = recorder(401);
+    await assertRejects(() => adoptShelly(fetcher, '192.168.1.20', 'shelly', broker), Error, 'password of its own');
+  });
+});

@@ -1,0 +1,55 @@
+#!ts
+/**
+ * automation-adopt — make a Shelly found on the network a device: point its MQTT at the broker, with
+ * the account devices sign in with, and restart it. The shelly or shelly-gen1 driver then hears it
+ * as it comes back. For members of the devices group.
+ *
+ * The broker's address is CFG_AUTOMATION_DEVICE_BROKER, else what the network listener says it is.
+ */
+
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags, serviceKey } from '@ein/client';
+import type { AdoptAnswer } from '@automation/api';
+import { adoptShelly, assertDevicesMember, readFound } from '@automation/network';
+
+const automationAdopt = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const id = String(flags._[0] ?? '').trim();
+  const fail = async (why: string) => {
+    await cmd.writeError(`automation-adopt: ${why}\n`);
+    return 1;
+  };
+  if (!id) return await fail('usage: automation-adopt <id>, as automation-found says it');
+  try {
+    await assertDevicesMember(cmd);
+    const found = await readFound(cmd);
+    if (!found) return await fail('the automation bridge is not running, so nothing is heard of the network');
+    const host = found.devices.find((each) => each.id === id || each.ip === id);
+    if (!host) return await fail(`nothing called ${id} was heard on the network (automation-found --all)`);
+    if (host.device) return await fail(`${host.label} is the device ${host.device} already`);
+    if (!host.adopt) return await fail(`${host.label} cannot be added from here${host.connect ? `: ${host.connect}` : ''}`);
+    const address = (cmd.env.CFG_AUTOMATION_DEVICE_BROKER ?? '').trim() || found.broker;
+    if (!address) return await fail('the address devices reach the broker at is not known: set CFG_AUTOMATION_DEVICE_BROKER');
+    const user = (cmd.env.CFG_AUTOMATION_DEVICE_USER ?? '').trim() || undefined;
+    const password = await serviceKey(cmd, 'CFG_AUTOMATION_DEVICE_KEY', 'CFG_AUTOMATION_DEVICE_BROKER');
+    await adoptShelly(fetch, host.ip, host.adopt, { address, user, password });
+    const answer: AdoptAnswer = { id: host.id, label: host.label, driver: host.adopt, broker: address, restarted: true };
+    if (cmd.json) await cmd.writeJSON(answer satisfies AdoptAnswer);
+    else await cmd.writeLn(`${host.label} talks to the broker at ${address} now and is restarting; it becomes a device when it is back`);
+    return 0;
+  } catch (error) {
+    return await fail(error instanceof Error ? error.message : String(error));
+  }
+};
+
+automationAdopt.spec = {
+  name: 'automation-adopt',
+  effect: 'write' as const,
+  description: 'Make a Shelly found on the network a device: point its MQTT at the broker and restart it (for members of the devices group)',
+  args: [{ name: 'id', type: 'string' as const, description: 'what automation-found calls it: its hardware address without colons, or its IP' }],
+  examples: ['automation-adopt a8032ab12345'],
+  returns: 'AdoptAnswer: id, label, driver, broker, restarted',
+};
+
+export default automationAdopt;

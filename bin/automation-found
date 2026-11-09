@@ -1,0 +1,70 @@
+#!ts
+/**
+ * automation-found — the devices on the network that the network listener beside the broker heard
+ * over mDNS and SSDP, what each is, and whether it is a device under /dev already. For members of
+ * the devices group.
+ *
+ *   automation-found              the ones that are no device yet, and not ignored
+ *   automation-found --addable    of those, the ones that can become a device of automation's
+ *   automation-found --all        every one, devices and ignored ones too
+ */
+
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { FoundAnswer } from '@automation/api';
+import { assertDevicesMember, readFound } from '@automation/network';
+
+const ago = (iso: string): string => {
+  const minutes = Math.round((Date.now() - Date.parse(iso)) / 60_000);
+  return minutes < 1 ? 'just now' : minutes < 120 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`;
+};
+
+const automationFound = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['addable', 'all'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  try {
+    await assertDevicesMember(cmd);
+  } catch (error) {
+    await cmd.writeError(`automation-found: ${error instanceof Error ? error.message : error}\n`);
+    return 1;
+  }
+  const found = await readFound(cmd);
+  if (!found) {
+    await cmd.writeError('automation-found: the automation bridge is not running, so nothing is heard of the network\n');
+    return 1;
+  }
+  const answer: FoundAnswer = {
+    ...found,
+    devices: found.devices.filter((each) => flags.all || (!each.device && !each.ignored && (!flags.addable || each.addable))),
+  };
+  if (cmd.json) {
+    await cmd.writeJSON(answer satisfies FoundAnswer);
+    return 0;
+  }
+  if (!answer.round) {
+    await cmd.writeLn('the network listener has not been heard: it runs beside the broker (setup.sh --mqtt)');
+    return 0;
+  }
+  for (const each of answer.devices) {
+    const what = [each.vendor, each.model].filter(Boolean).join(' ') || each.kind;
+    const state = each.device ? `device ${each.device}` : each.ignored ? 'ignored' : each.addable ? (each.adopt ? 'can be added' : 'can be added by hand') : '';
+    await cmd.writeLn([each.id.padEnd(15), each.ip.padEnd(15), each.label, `(${what})`, state].filter(Boolean).join('  '));
+  }
+  await cmd.writeLn(`${answer.devices.length} found; the listener's last round ${ago(answer.round)}`);
+  return 0;
+};
+
+automationFound.spec = {
+  name: 'automation-found',
+  effect: 'read' as const,
+  description:
+    'The devices on the network the network listener heard over mDNS and SSDP: what each is, whether it can become a device and whether it is one already (for members of the devices group)',
+  flags: [
+    { name: 'addable', type: 'bool' as const, description: 'only the ones that can become a device of automation’s' },
+    { name: 'all', type: 'bool' as const, description: 'every one, the devices already under /dev and the ignored ones too' },
+  ],
+  examples: ['automation-found', 'automation-found --addable', 'automation-found --all'],
+  returns: 'FoundAnswer: round, broker, devices [{id, ip, mac, names, seen, services, kind, vendor, label, model, firmware, class, addable, adopt, connect, device, ignored}]',
+};
+
+export default automationFound;

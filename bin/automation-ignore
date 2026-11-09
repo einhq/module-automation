@@ -1,0 +1,44 @@
+#!ts
+/**
+ * automation-ignore — leave a device found on the network out of automation-found and the Devices
+ * page's count, or with --undo take it back. For members of the devices group.
+ */
+
+import { type CmdReturn, collectUnknownFlags, type Command, parseArgs, reportUnknownFlags } from '@ein/client';
+import { assertDevicesMember, readIgnored, writeIgnored } from '@automation/network';
+
+const automationIgnore = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { boolean: ['undo'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const ids = flags._.map(String).filter(Boolean);
+  if (!ids.length) {
+    await cmd.writeError('automation-ignore: usage: automation-ignore <id>... [--undo], ids as automation-found says them\n');
+    return 1;
+  }
+  try {
+    await assertDevicesMember(cmd);
+    const ignored = await readIgnored(cmd);
+    for (const id of ids) {
+      if (flags.undo) ignored.delete(id);
+      else ignored.add(id);
+    }
+    await writeIgnored(cmd, ignored);
+  } catch (error) {
+    await cmd.writeError(`automation-ignore: ${error instanceof Error ? error.message : error}\n`);
+    return 1;
+  }
+  if (cmd.json) await cmd.writeJSON({ ok: true });
+  return 0;
+};
+
+automationIgnore.spec = {
+  name: 'automation-ignore',
+  effect: 'write' as const,
+  description: 'Leave devices found on the network out of automation-found, or take them back with --undo (for members of the devices group)',
+  args: [{ name: 'id', type: 'string' as const, description: 'what automation-found calls it; more than one may be given' }],
+  flags: [{ name: 'undo', type: 'bool' as const, description: 'take them back' }],
+  examples: ['automation-ignore d0ad08c5e709', 'automation-ignore d0ad08c5e709 --undo'],
+};
+
+export default automationIgnore;

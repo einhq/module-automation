@@ -1,7 +1,8 @@
 /**
  * The bridge: one MQTT connection, the sources listening on it, and the device writer they feed.
  * It connects, subscribes to what each source listens on and to every topic a source asked for
- * since, and hands each message to every source. When the connection is lost it connects again,
+ * since, and hands each message to every source, except what the network listener says under
+ * `ein/discovery/`, which it keeps as the hosts on the network `automation-found` names. When the connection is lost it connects again,
  * waiting 1 s, then twice as long each time up to a minute, so a broker that is away never ends
  * the service.
  *
@@ -16,6 +17,7 @@
 import type { Command, Driver, ModuleDevices } from '@ein/client';
 import { commandValue, type DeviceWriter } from './drivers.ts';
 import type { MqttConnect, MqttConnection, MqttMessage } from './mqtt.ts';
+import { NetworkHosts } from './network/found.ts';
 import type { Publish, RunningSource, Update } from './sources/mod.ts';
 import { type BridgeState, setBridgeState } from './state.ts';
 
@@ -43,7 +45,8 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
 
   /** Topics the sources asked for after the start, subscribed again on every connection. */
   const asked = new Set<string>();
-  const base = [...new Set(sources.flatMap((source) => source.topics()))];
+  const network = new NetworkHosts();
+  const base = [...new Set([...sources.flatMap((source) => source.topics()), ...network.topics()])];
   let connection: MqttConnection | undefined;
 
   const state: BridgeState = {
@@ -53,6 +56,7 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
     since: Date.now(),
     messages: 0,
     notes: () => sources.flatMap((source) => source.notes?.() ?? []),
+    network,
   };
   setBridgeState(state);
 
@@ -91,6 +95,7 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
 
   const onMessage = (received: MqttMessage) => {
     state.messages++;
+    if (network.hear(received.topic, received.payload)) return;
     for (const source of sources) {
       let updates: Update[];
       try {

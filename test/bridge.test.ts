@@ -2,13 +2,14 @@
  * The bridge in a booted EiN against a broker of the test's own: devices it hears become core's
  * devices under /dev with endpoints of the right types, their readings are kept there and reach
  * anyone's queue, a write to a control reaches the device as whoever may give it, a forgotten device
- * stays forgotten, and a reconnect adds nothing.
+ * stays forgotten, and a reconnect adds nothing. What the network listener says on the same broker
+ * is what automation-found lists, matched to those devices.
  */
 
 import { assertEquals, assertExists, assertStringIncludes } from '@std/assert';
 import type { DeviceHistory, DeviceInfo, DriverSummary } from '@ein/api';
 import { createTestContext, type ShellClient, testCommands } from '@ein/testing';
-import type { AutomationStatus } from '@automation/api';
+import type { AutomationStatus, FoundAnswer, NetworkHost } from '@automation/api';
 import { esphomeConfigs, esphomeStates, shellyButton, shellyGen1Plug, shellyPlug } from './fixtures.ts';
 import { startStubBroker } from './stub-broker.ts';
 
@@ -204,6 +205,49 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
       broker.publish(plug.relay.topic, plug.relay.payload);
       const info = await until('a plug', () => admin.execJson<DeviceInfo>('device-show shellyplug-s-a1b2c3d4e5f6'), (info) => info.class === 'plug');
       assertEquals([info.driver, info.endpointList.map((endpoint) => [endpoint.name, endpoint.type])], ['shelly-gen1', [['relay-0', 'control'], ['relay-0-power', 'log']]]);
+    });
+
+    await t.step('the hosts the network listener heard are listed for the devices group, matched to their devices', async () => {
+      const seen = new Date().toISOString();
+      const hosts: Record<string, NetworkHost> = {
+        a1b2c3d4e5f6: {
+          ip: '192.168.1.21',
+          names: ['shellyplug-s-a1b2c3d4e5f6.local'],
+          seen,
+          ssdp: [],
+          mdns: [{ type: '_http._tcp', instance: 'shellyplug-s-A1B2C3D4E5F6', txt: {} }],
+        },
+        a8032ab12345: {
+          ip: '192.168.1.20',
+          names: ['shellyplus1pm-a8032ab12345.local'],
+          seen,
+          ssdp: [],
+          mdns: [{ type: '_shelly._tcp', instance: 'shellyplus1pm-a8032ab12345', txt: { gen: '2', app: 'Plus1PM' } }],
+        },
+      };
+      for (const [id, host] of Object.entries(hosts)) broker.publish(`ein/discovery/host/${id}`, JSON.stringify(host), { retain: true });
+      broker.publish('ein/discovery/status', JSON.stringify({ round: seen, hosts: 2, broker: '192.168.1.2:1883' }), { retain: true });
+      const all = await until('found', () => anna.execJson<FoundAnswer>('automation-found --all'), (found) => found.devices.length === 2);
+      assertEquals(all.broker, '192.168.1.2:1883');
+      assertEquals(all.devices.map((each) => [each.id, each.kind, each.device, each.adopt]), [
+        ['a1b2c3d4e5f6', 'shelly-gen1', 'shellyplug-s-a1b2c3d4e5f6', 'shelly-gen1'],
+        ['a8032ab12345', 'shelly', undefined, 'shelly'],
+      ]);
+      assertEquals((await anna.execJson<FoundAnswer>('automation-found --addable')).devices.map((each) => each.id), ['a8032ab12345']);
+      await testCommands(bo).shouldFailWith('automation-found', 'devices group');
+      await testCommands(anna).shouldFailWith('automation-adopt a1b2c3d4e5f6', 'device shellyplug-s-a1b2c3d4e5f6 already');
+    });
+
+    await t.step('an ignored host is left out until it is taken back', async () => {
+      await anna.execString('automation-ignore a8032ab12345');
+      assertEquals((await anna.execJson<FoundAnswer>('automation-found')).devices.length, 0);
+      await anna.execString('automation-ignore a8032ab12345 --undo');
+      assertEquals((await anna.execJson<FoundAnswer>('automation-found')).devices.map((each) => each.id), ['a8032ab12345']);
+    });
+
+    await t.step('a host the listener lets go is gone', async () => {
+      broker.publish('ein/discovery/host/a8032ab12345', '', { retain: true });
+      await until('gone', () => anna.execJson<FoundAnswer>('automation-found --all'), (found) => found.devices.length === 1);
     });
   } finally {
     for (const client of clients) client.close();

@@ -1,0 +1,12 @@
+{
+  "panels": [
+    {
+      "id": "automation.found-devices",
+      "slot": "devices.header",
+      "label": "Found on the network",
+      "icon": "radar",
+      "route": "/found-devices-button",
+      "signedIn": true
+    }
+  ]
+}
