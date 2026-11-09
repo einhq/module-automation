@@ -5,7 +5,7 @@
  * `ein/discovery/`, which it keeps as the hosts on the network `automation-found` names. When the
  * connection is lost it connects again, waiting 1 s, then twice as long each time up to a minute,
  * so a broker that is away never ends the service. Beside the sources it runs the polled drivers
- * (`network`, `ipp`, `cast`), which ask their devices on the network themselves.
+ * (`network`, `ipp`, `snmp`, `cast`, `http`), which ask their devices themselves.
  *
  * Each source is registered with core as the driver of the devices it finds, for as long as the
  * bridge runs. A value written to one of their controls (`echo on > /dev/hall-plug/switch-0`),

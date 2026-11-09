@@ -53,11 +53,12 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
 
     await t.step('the bridge connects and registers a driver for each source', async () => {
       const status = await until('connected', () => admin.execJson<AutomationStatus>('automation-status'), (status) => status.connected);
-      assertEquals(status.drivers, ['ha-discovery', 'shelly', 'shelly-gen1', 'network', 'ipp', 'snmp', 'cast']);
+      assertEquals(status.drivers, ['ha-discovery', 'shelly', 'shelly-gen1', 'network', 'ipp', 'snmp', 'cast', 'http']);
       const drivers = await anna.execJson<DriverSummary[]>('devices --drivers');
       assertEquals(drivers.filter((driver) => driver.module === 'automation').map((driver) => [driver.name, driver.running]), [
         ['cast', true],
         ['ha-discovery', true],
+        ['http', true],
         ['ipp', true],
         ['network', true],
         ['shelly', true],
@@ -311,6 +312,42 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
           ['state', 'idle'],
           ['warnings', 'marker-supply-low-warning'],
         ]);
+      } finally {
+        await server.shutdown();
+      }
+    });
+
+    await t.step('a web API is asked at its address for the readings named in it', async () => {
+      const hour = new Date();
+      hour.setMinutes(0, 0, 0);
+      const at = (hours: number) => new Date(hour.getTime() + hours * 3_600_000).toISOString();
+      const asked: string[] = [];
+      const server = Deno.serve({ hostname: '127.0.0.1', port: 0, onListen: () => {} }, (request) => {
+        asked.push(`${new URL(request.url).pathname} ${request.headers.get('authorization') ?? ''}`);
+        return Response.json({
+          current: { temperature_2m: 7.5, weather: 'drizzle' },
+          prices: [-1, 0, 1].map((hours) => ({ SEK_per_kWh: String(1 + hours / 10), time_start: at(hours), time_end: at(hours + 1) })),
+        });
+      });
+      try {
+        const url = `http://reader:pw@127.0.0.1:${server.addr.port}/forecast/{date}.json`;
+        const read = 'temperature=current.temperature_2m °C; weather=current.weather; price=prices[time_start..time_end].SEK_per_kWh SEK/kWh';
+        await anna.execString(`device-create Weather --driver http --config 'url=${url}' --config 'read=${read}' --config interval=1h`);
+        const info = await until('read', () => anna.execJson<DeviceInfo>('device-show weather'), (info) => info.endpointList.filter((each) => each.last).length === 3);
+        assertEquals([info.driver, info.class, info.online], ['http', 'sensor', true]);
+        assertEquals(info.main?.endpoint, 'temperature');
+        assertEquals(info.endpointList.map((endpoint) => [endpoint.name, endpoint.last?.value, endpoint.unit]), [
+          ['price', 1, 'SEK/kWh'],
+          ['temperature', 7.5, '°C'],
+          ['weather', 'drizzle', undefined],
+        ]);
+        const today = new Date();
+        const date = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+        assertEquals(asked[0], `/forecast/${date}.json Basic ${btoa('reader:pw')}`);
+
+        const refused = await anna.exec(`device-create Prices --driver http --config 'url=http://127.0.0.1/' --config 'read=price'`);
+        assertEquals(refused.success, false);
+        assertStringIncludes(refused.error ?? '', "prices was made, but http cannot ask it: a reading is name=path [unit], not 'price'");
       } finally {
         await server.shutdown();
       }

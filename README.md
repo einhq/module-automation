@@ -20,7 +20,10 @@ itself, over the network: `ipp` for a printer (state, warnings, ink and toner), 
 Cast speaker (what it plays; volume, mute, play, pause and stop), `snmp` for a NAS or anything
 else that answers SNMP (uptime, load, memory, each volume's use, temperatures; the community is
 `CFG_AUTOMATION_SNMP_COMMUNITY`), and `network` for the rest (whether it answers, and how fast).
-`automation-snmp <host> [oid]` walks what a device's agent answers. `automation-ignore` leaves one out. The Devices page shows how
+`automation-snmp <host> [oid]` walks what a device's agent answers. The `http` driver asks a web
+API that answers JSON, made by hand with `device-create <name> --driver http --config url=… --config
+read=…`: a Shelly or Tasmota over HTTP, the weather, the price of electricity, each reading a path
+in the answer (`temperature=current.temperature_2m °C`, `price=[time_start..time_end].SEK_per_kWh`). `automation-ignore` leaves one out. The Devices page shows how
 many can be added, and opens them as a page of their own.
 
 The devices, their pages and the device commands are EiN core's; this module brings the drivers and

@@ -12,6 +12,7 @@ import { identify, webPageOf } from '../lib/network/identify.ts';
 import { parseIppResponse, printerAttributesRequest } from '../lib/network/ipp.ts';
 import { decodeCastMessage, encodeCastMessage } from '../lib/network/cast.ts';
 import { changesOf, createPolledDrivers, reach } from '../lib/network/polled.ts';
+import { checkHttpConfig, expandUrl, fetchAnswer, intervalOf, parseReadings, readAnswer } from '../lib/network/http.ts';
 import { ippResponse, startSnmpAgent } from './fixtures.ts';
 import { snmpWalk } from '../lib/network/snmp.ts';
 
@@ -269,7 +270,7 @@ Deno.test({ name: 'the snmp driver reads a NAS: uptime, load, memory, its volume
   try {
     const snmp = createPolledDrivers(fetch).find((driver) => driver.name === 'snmp')!;
     await t.step("a poll names each reading once, a volume by its mount, the system's own mounts left out", async () => {
-      const polled = await snmp.poll({ name: 'attic-nas', ip: '127.0.0.1', snmpPort: port });
+      const polled = await snmp.poll({ name: 'attic-nas', ip: '127.0.0.1', snmpPort: port, config: {} });
       assertEquals(polled.entities.map((each) => each.entity), ['uptime', 'load', 'memory-used', 'c-used', 'c-free', 'cpu-temperature']);
       assertEquals(polled.values, { uptime: 10, load: 0.42, 'memory-used': 25, 'c-used': 90, 'c-free': 0.4, 'cpu-temperature': 47.5 });
     });
@@ -279,9 +280,86 @@ Deno.test({ name: 'the snmp driver reads a NAS: uptime, load, memory, its volume
       assertEquals(walked[0], { oid: `${storage}.2.1`, type: 'OID', value: '1.3.6.1.2.1.25.2.1.2' });
     });
     await t.step('another community is not answered, and says so', async () => {
-      await assertRejects(() => snmp.poll({ name: 'attic-nas', ip: '127.0.0.1', snmpPort: port, community: 'wrong' }), Error, "with the community 'wrong'");
+      await assertRejects(() => snmp.poll({ name: 'attic-nas', ip: '127.0.0.1', snmpPort: port, community: 'wrong', config: {} }), Error, "with the community 'wrong'");
     });
   } finally {
     agent.close();
   }
+});
+
+Deno.test('the http driver reads what is named in an answer', async (t) => {
+  await t.step('a weather API: fields, units and a word', () => {
+    const readings = parseReadings('Temperature=current.temperature_2m °C; wind=current.wind_speed_10m m/s\nsky=current.weather');
+    assertEquals(readings.map((each) => [each.name, each.label, each.unit]), [['temperature', 'Temperature', '°C'], ['wind', 'wind', 'm/s'], ['sky', 'sky', undefined]]);
+    const answer = JSON.stringify({ current: { temperature_2m: -3.5, wind_speed_10m: '4.2', weather: 'snow' } });
+    assertEquals(readAnswer(answer, readings), { temperature: -3.5, wind: 4.2, sky: 'snow' });
+  });
+
+  await t.step("a Shelly's and a Tasmota's own answers: keys with a colon, items, the last", () => {
+    const shelly = JSON.stringify({ 'switch:0': { apower: 41.2, output: true }, meters: [{ power: 12 }, { power: 3 }] });
+    assertEquals(readAnswer(shelly, parseReadings('power=switch:0.apower W; on=switch:0.output; first=meters[0].power; last=meters[-1].power')), {
+      power: 41.2,
+      on: true,
+      first: 12,
+      last: 3,
+    });
+    const tasmota = JSON.stringify({ StatusSNS: { ENERGY: { Power: 230, 'Total Today': 1.25 } } });
+    assertEquals(readAnswer(tasmota, parseReadings("power=StatusSNS.ENERGY.Power W; today=StatusSNS.ENERGY['Total Today'] kWh")), { power: 230, today: 1.25 });
+  });
+
+  await t.step("an electricity price: the hour's item of a list", () => {
+    const prices = JSON.stringify([
+      { SEK_per_kWh: 0.5, time_start: '2026-11-09T00:00:00+01:00', time_end: '2026-11-09T01:00:00+01:00' },
+      { SEK_per_kWh: 0.7, time_start: '2026-11-09T01:00:00+01:00', time_end: '2026-11-09T02:00:00+01:00' },
+    ]);
+    const now = Date.parse('2026-11-09T00:30:00Z');
+    assertEquals(readAnswer(prices, parseReadings('price=[time_start..time_end].SEK_per_kWh SEK/kWh'), now), { price: 0.7 });
+    assertEquals(readAnswer(prices, parseReadings('price=[time_start..].SEK_per_kWh'), now), { price: 0.7 });
+    assertEquals(readAnswer(prices, parseReadings('price=[time_start..time_end].SEK_per_kWh'), Date.parse('2026-11-09T03:00:00Z')), {});
+  });
+
+  await t.step('plain text is the whole answer; a list or an object is no value', () => {
+    assertEquals(readAnswer('21.5\n', parseReadings('temperature=. °C')), { temperature: 21.5 });
+    assertEquals(readAnswer('{"a":{"b":1},"c":[1]}', parseReadings('a=a; c=c; missing=x.y')), {});
+  });
+
+  await t.step('what is not understood is refused, saying what', () => {
+    assertThrows(() => parseReadings(''), Error, 'read names no reading');
+    assertThrows(() => parseReadings('price'), Error, "a reading is name=path [unit], not 'price'");
+    assertThrows(() => parseReadings('a=b; a=c'), Error, 'the reading a is named twice');
+    assertThrows(() => parseReadings('a=b[x]'), Error, 'the path b[x] is not understood');
+    assertThrows(() => checkHttpConfig({ read: 'a=b' }), Error, 'it needs url');
+    assertThrows(() => checkHttpConfig({ url: 'ftp://192.0.2.1/', read: 'a=b' }), Error, 'url is http or https');
+    assertThrows(() => checkHttpConfig({ url: 'http://192.0.2.1/', read: 'a=b', interval: 'often' }), Error, 'interval is seconds');
+  });
+
+  await t.step('the address names the day and hour it is asked at; the interval has a floor', () => {
+    const at = new Date(2026, 0, 5, 7, 30);
+    assertEquals(expandUrl('https://prices.example/{year}/{month}-{day}_SE3.json?h={hour}&d={date}', at), 'https://prices.example/2026/01-05_SE3.json?h=07&d=2026-01-05');
+    assertEquals([intervalOf(undefined), intervalOf('120'), intervalOf('15m'), intervalOf('1')], [300_000, 120_000, 900_000, 10_000]);
+  });
+
+  await t.step('basic auth from the address; an error answer is said', async () => {
+    const seen: [string, string | null][] = [];
+    const fetcher = (url: string, init?: RequestInit) => {
+      seen.push([url, new Headers(init?.headers).get('authorization')]);
+      return Promise.resolve(url.endsWith('/gone') ? new Response('no', { status: 404, statusText: 'Not Found' }) : new Response('{"ok":1}'));
+    };
+    assertEquals(await fetchAnswer(fetcher, 'http://admin:s%3Acret@192.0.2.20/status'), '{"ok":1}');
+    assertEquals(seen[0], ['http://192.0.2.20/status', `Basic ${btoa('admin:s:cret')}`]);
+    await assertRejects(() => fetchAnswer(fetcher, 'http://192.0.2.20/gone'), Error, '192.0.2.20 answered 404 Not Found');
+  });
+
+  await t.step('a poll announces the readings as sensors, and fails when none is in the answer', async () => {
+    const http = createPolledDrivers(() => Promise.resolve(new Response('{"t":{"v":20}}'))).find((driver) => driver.name === 'http')!;
+    const polled = await http.poll({ name: 'weather', ip: '', config: { url: 'http://192.0.2.1/', read: 't=t.v °C; rain=t.rain mm' } });
+    assertEquals(polled.values, { t: 20 });
+    assertEquals(polled.entities.map((each) => [each.entity, each.entityKind, each.unit, each.deviceClass]), [['t', 'sensor', '°C', 'temperature'], [
+      'rain',
+      'sensor',
+      'mm',
+      undefined,
+    ]]);
+    await assertRejects(() => http.poll({ name: 'weather', ip: '', config: { url: 'http://192.0.2.1/', read: 'x=y' } }), Error, 'none of its readings is in the answer');
+  });
 });

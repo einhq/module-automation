@@ -8,15 +8,18 @@
  * - `snmp`: a NAS, a router or anything else that answers SNMP; its uptime, load, memory, each
  *   volume's use and its temperatures, from the standard MIBs (Host Resources, net-snmp's UCD);
  * - `cast`: a Google Cast device; whether it plays and what (title, artist and app as one line), its
- *   volume and mute, which can be set, and play, pause and stop.
+ *   volume and mute, which can be set, and play, pause and stop;
+ * - `http`: a web API that answers JSON, at an address rather than a host (`http.ts`): a Shelly's or
+ *   Tasmota's own, the weather, the price of electricity; the readings a person names in it.
  *
  * Each poll says what the device is as the sources do (`DeviceChange`s), which the device writer
  * makes endpoints of; a device that does not answer is offline.
  */
 
-import { deviceName, type DeviceValue } from '@ein/api';
+import { deviceName, type DeviceValue, type DriverConfigField } from '@ein/api';
 import type { Fetch } from './adopt.ts';
 import { castCommand, castStatus } from './cast.ts';
+import { checkHttpConfig, deviceClassOfUnit, expandUrl, fetchAnswer, intervalOf, parseReadings, readAnswer } from './http.ts';
 import { getPrinterAttributes } from './ipp.ts';
 import { snmpGet, type SnmpValue, snmpWalk } from './snmp.ts';
 import type { DeviceChange, EntityUpdate } from '../sources/mod.ts';
@@ -24,6 +27,7 @@ import type { DeviceChange, EntityUpdate } from '../sources/mod.ts';
 /** A device of one of these drivers, where it is now. */
 export type PolledDevice = {
   name: string;
+  /** Its address on the network; empty for a driver that is not `addressed`. */
   ip: string;
   /** The port the host offered a service on, to try first. */
   port?: number;
@@ -33,13 +37,23 @@ export type PolledDevice = {
   community?: string;
   /** The port its SNMP agent answers on, when not 161. */
   snmpPort?: number;
+  /** What a person gave its driver. */
+  config: Record<string, string>;
 };
 
 export type PolledDriver = {
   name: string;
   description: string;
-  /** How often its devices are asked. */
+  /** How often its devices are asked, unless `intervalOf` says for one. */
   intervalMs: number;
+  /** How often a device is asked, from its config. */
+  intervalOf?(config: Record<string, string>): number;
+  /** False for a driver whose devices are asked at an address in their config, not at a host's. */
+  addressed?: false;
+  /** What a person gives when making one of its devices; the host's address unless said. */
+  config?: DriverConfigField[];
+  /** Checks a device's config when a person makes it; throws saying what is wrong. */
+  check?(config: Record<string, string>): void;
   /** What the device says now; throws when it does not answer. */
   poll(device: PolledDevice): Promise<{ entities: EntityUpdate[]; values: Record<string, DeviceValue> }>;
   /** Sends a value written to one of its controls. */
@@ -166,6 +180,10 @@ const createSnmp = (): PolledDriver => ({
   name: 'snmp',
   description: 'A NAS, a router or anything that answers SNMP: its uptime, load, memory, volumes and temperatures',
   intervalMs: 60_000,
+  config: [
+    { name: 'ip', label: 'Address on the network', type: 'string', required: true },
+    { name: 'community', label: 'SNMP community', type: 'string' },
+  ],
   poll: async (device) => {
     const target = { host: device.ip, port: device.snmpPort, community: device.community || DEFAULT_COMMUNITY };
     const system = await snmpGet(target, [OID.uptime, OID.load]);
@@ -244,11 +262,39 @@ const cast: PolledDriver = {
   },
 };
 
+const createHttp = (fetcher: Fetch): PolledDriver => ({
+  name: 'http',
+  description: 'A web API that answers JSON: a Shelly or Tasmota asked over HTTP, the weather, the price of electricity; the readings you name in it',
+  intervalMs: intervalOf(undefined),
+  intervalOf: (config) => intervalOf(config.interval),
+  addressed: false,
+  config: [
+    { name: 'url', label: 'Address to ask, with {date}, {year}, {month}, {day} or {hour} for when', type: 'url', required: true },
+    { name: 'read', label: 'Readings, as name=path unit; name=path unit', type: 'string', required: true },
+    { name: 'interval', label: 'How often, in seconds or as 15m', type: 'string' },
+  ],
+  check: checkHttpConfig,
+  poll: async (device) => {
+    const readings = parseReadings(device.config.read ?? '');
+    const values = readAnswer(await fetchAnswer(fetcher, expandUrl(device.config.url ?? '', new Date())), readings);
+    if (!Object.keys(values).length) throw new Error('none of its readings is in the answer');
+    const entities = readings.map((reading) =>
+      entity(device.name, reading.name, {
+        entityKind: 'sensor',
+        label: reading.label,
+        ...(reading.unit ? { unit: reading.unit } : {}),
+        ...(deviceClassOfUnit(reading.unit) ? { deviceClass: deviceClassOfUnit(reading.unit) } : {}),
+      })
+    );
+    return { entities, values };
+  },
+});
+
 /** The polled drivers, by name. */
-export const createPolledDrivers = (fetcher: Fetch): PolledDriver[] => [network, createIpp(fetcher), createSnmp(), cast];
+export const createPolledDrivers = (fetcher: Fetch): PolledDriver[] => [network, createIpp(fetcher), createSnmp(), cast, createHttp(fetcher)];
 
 /** The names of the polled drivers. */
-export const POLLED_DRIVERS: readonly string[] = ['network', 'ipp', 'snmp', 'cast'];
+export const POLLED_DRIVERS: readonly string[] = ['network', 'ipp', 'snmp', 'cast', 'http'];
 
 /** What one poll says, as the changes the device writer applies. */
 export const changesOf = (device: string, polled: { entities: EntityUpdate[]; values: Record<string, DeviceValue> }, known: Set<string>): DeviceChange[] => [

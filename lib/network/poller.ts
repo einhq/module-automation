@@ -4,11 +4,13 @@
  * host on the network: its `config.found` is the id the network listener knows it by, so a new
  * address from DHCP is the one asked, and its web page (`url`) follows it; `config.ip` is the address
  * it was last at, and the one a person gives with `device-create --driver network --config ip=…`.
+ * A driver that is not `addressed` (`http`) asks at an address in the device's config instead, as
+ * often as the device's config says.
  */
 
 import type { DeviceAttrs } from '@ein/api';
 import { ADMIN_ACCESS, type Command, type ModuleDevices } from '@ein/client';
-import { DEV_PATH } from '@ein/paths';
+import { DEV_PATH, devicePath } from '@ein/paths';
 import type { DeviceWriter } from '../drivers.ts';
 import type { NetworkHosts } from './found.ts';
 import { webPageOf } from './identify.ts';
@@ -50,6 +52,7 @@ export const startPoller = (options: PollerOptions): Poller => {
   /** Where the device is now: its host's address while the listener hears it, else its last. */
   const locate = (name: string, attrs: DeviceAttrs): PolledDevice | undefined => {
     const config = attrs.config ?? {};
+    if (byName.get(attrs.driver ?? '')?.addressed === false) return { name, ip: '', config };
     const host = config.found ? network.hosts.get(config.found) : undefined;
     const ip = host?.ip ?? config.ip;
     if (!ip) return undefined;
@@ -61,7 +64,18 @@ export const startPoller = (options: PollerOptions): Poller => {
       ...(config.path ? { path: config.path } : {}),
       ...(config.community ? { community: config.community } : {}),
       ...(Number(config['snmp-port']) ? { snmpPort: Number(config['snmp-port']) } : {}),
+      config,
     };
+  };
+
+  /** How often a device is asked: as its config says, else as its driver does. */
+  const intervalOf = (attrs: DeviceAttrs): number => {
+    const driver = byName.get(attrs.driver!)!;
+    try {
+      return driver.intervalOf?.(attrs.config ?? {}) ?? driver.intervalMs;
+    } catch {
+      return driver.intervalMs;
+    }
   };
 
   const ours = async () => {
@@ -85,7 +99,7 @@ export const startPoller = (options: PollerOptions): Poller => {
       for (const each of polled.entities) known.add(each.entity);
       const host = attrs.config?.found ? network.hosts.get(attrs.config.found) : undefined;
       const url = host ? webPageOf(host) : attrs.url;
-      if (where.ip !== attrs.config?.ip || url !== attrs.url) {
+      if (driver.addressed !== false && (where.ip !== attrs.config?.ip || url !== attrs.url)) {
         await devices.ensureDevice(cmd.access, name, { config: { ...attrs.config, ip: where.ip }, ...(url ? { url } : {}) });
       }
       silent.delete(name);
@@ -106,8 +120,7 @@ export const startPoller = (options: PollerOptions): Poller => {
         const wanted = new Set(pending);
         pending.clear();
         for (const child of await ours()) {
-          const driver = byName.get(child.node.attrs.driver!)!;
-          const due = (asked.get(child.name) ?? 0) + driver.intervalMs <= Date.now();
+          const due = (asked.get(child.name) ?? 0) + intervalOf(child.node.attrs) <= Date.now();
           if (due || wanted.has(child.name)) await pollOne(child.name, child.node.attrs);
           if (stopped) return;
         }
@@ -122,10 +135,7 @@ export const startPoller = (options: PollerOptions): Poller => {
     devices.registerDriver(driver.name, {
       description: driver.description,
       module: 'automation',
-      config: [
-        { name: 'ip', label: 'Address on the network', type: 'string', required: true },
-        ...(driver.name === 'snmp' ? [{ name: 'community', label: 'SNMP community', type: 'string' as const }] : []),
-      ],
+      config: driver.config ?? [{ name: 'ip', label: 'Address on the network', type: 'string', required: true }],
       ...(driver.write
         ? {
           write: async ({ device, endpoint, attrs, value, by }) => {
@@ -142,9 +152,20 @@ export const startPoller = (options: PollerOptions): Poller => {
         announced.delete(device);
         await writer.forget(device);
       },
-      setup: (device) => {
+      setup: async (device) => {
+        if (driver.check) {
+          const attrs = (await cmd.sys.vfs.get(ADMIN_ACCESS, devicePath(device)).catch(() => undefined))?.attrs as DeviceAttrs | undefined;
+          try {
+            driver.check(attrs?.config ?? {});
+          } catch (error) {
+            throw new Error(
+              `${device} was made, but ${driver.name} cannot ask it: ${message(error)}; change its config with attrs -J 'config={…}' ${
+                devicePath(device)
+              }, or device-forget ${device}`,
+            );
+          }
+        }
         setTimeout(() => tick(device).catch(() => {}), 0);
-        return Promise.resolve();
       },
     })
   );
