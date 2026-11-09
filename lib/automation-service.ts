@@ -12,6 +12,9 @@
  * timers. A changed one starts afresh, primed, and takes over the deadlines its nodes waited for;
  * so does every one when the service starts, from the deadlines kept in its state file.
  *
+ * It also runs the `virtual` driver (`virtual.ts`), whose devices' readings it works out from the
+ * same messages.
+ *
  * A message said more than a minute before the service started (it waited in the queue while the
  * service was down) or replayed from the broker moves state but acts on nothing: a press from an
  * hour ago does not switch a lamp now. A reading's own time is not judged otherwise: a throttled
@@ -27,6 +30,7 @@ import { fingerprint } from './automations/graph.ts';
 import { valueOfText } from './automations/values.ts';
 import { AUTOMATIONS_DIR, AUTOMATIONS_KEYS, AUTOMATIONS_QUEUE, MODULE_AUTOMATIONS_DIR, MODULE_RUN_LOGS_DIR, MODULE_STATE_DIR, RUN_LOGS_DIR, STATE_DIR } from './paths.ts';
 import { setEngineState } from './state.ts';
+import { startVirtualDevices } from './virtual.ts';
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -91,6 +95,7 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
   await vfs.ensure(cmd.access, 'queue', parent(AUTOMATIONS_QUEUE), leaf(AUTOMATIONS_QUEUE), { attrs: { routingKeys: AUTOMATIONS_KEYS } });
   await vfs.update(cmd.access, AUTOMATIONS_QUEUE, { attrs: { routingKeys: AUTOMATIONS_KEYS } });
 
+  const virtual = cmd.sys.devices ? await startVirtualDevices(cmd, log) : undefined;
   const users = accounts(vfs);
   const runs = new Map<string, Run>();
   /** Every automation read, with why it does not run. */
@@ -293,7 +298,10 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
     const at = Date.now();
     for (const run of runs.values()) run.engine.tick(at);
   }, TICK_MS);
-  const recheck = setInterval(() => load(true).catch((error) => log(`checking the automations again: ${error}`)), RECHECK_MS);
+  const recheck = setInterval(() => {
+    load(true).catch((error) => log(`checking the automations again: ${error}`));
+    virtual?.recheck().catch((error) => log(`checking the virtual devices again: ${error}`));
+  }, RECHECK_MS);
   const save = setInterval(() => {
     for (const run of runs.values()) saveDeadlines(run).catch((error) => log(`${run.file.name}: keeping its deadlines: ${error}`));
   }, SAVE_MS);
@@ -309,6 +317,7 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
       try {
         const event = eventOf(JSON.parse(decoder.decode(bytes)));
         if (event) {
+          await virtual?.handle(event);
           const key = event.endpoint === undefined ? event.device : `${event.device}/${event.endpoint}`;
           const quiet = event.retained === true || event.at < startedAt - STALE_MS;
           for (const run of runs.values()) if (run.hears.has(key)) run.engine.handle(event, { quiet });
@@ -325,6 +334,7 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
     clearTimeout(reload);
     for (const run of runs.values()) await saveDeadlines(run).catch(() => {});
     for (const name of [...runs.keys()]) await stopRun(name);
+    await virtual?.stop();
     for (const subscription of subscriptions) await subscription?.unsubscribe().catch(() => {});
     await queue?.close().catch(() => {});
     setEngineState(undefined);

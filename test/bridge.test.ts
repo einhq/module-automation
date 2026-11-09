@@ -64,6 +64,7 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
         ['shelly', true],
         ['shelly-gen1', true],
         ['snmp', true],
+        ['virtual', true],
       ]);
     });
 

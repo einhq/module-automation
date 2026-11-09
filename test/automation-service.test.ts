@@ -212,6 +212,44 @@ Deno.test({ name: 'automation engine', sanitizeResources: false, sanitizeOps: fa
       await running('porch');
     });
 
+    await t.step('a virtual device averages two sensors, and follows them', async () => {
+      await admin.execString('device-create hall-sensor --driver webhook && device-create kitchen-sensor --driver webhook');
+      await admin.execString(`echo '{"temperature": 20}' > /dev/hall-sensor && echo '{"temperature": 23}' > /dev/kitchen-sensor`);
+      await anna.execString(
+        `device-create indoors --driver virtual --class sensor --config ${
+          quoted('read=temperature=avg hall-sensor/temperature kitchen-sensor/temperature; warmest=max hall-sensor/temperature kitchen-sensor/temperature')
+        } --config ${quoted('set=away=bool; setpoint=number 5..30 0.5 °C')}`,
+      );
+      const reading = (endpoint: string) => async () => (await anna.execString(`tail -n 1 /dev/indoors/${endpoint}`)).trim();
+      await until('the average', reading('temperature'), (text) => text.includes('21.5'));
+      await admin.execString(`echo '{"temperature": 26}' > /dev/kitchen-sensor`);
+      await until('the average again', reading('temperature'), (text) => text.includes('23'));
+      await until('the warmest', reading('warmest'), (text) => text.includes('26'));
+      assertEquals((await anna.exec('echo 99 > /dev/indoors/temperature')).success, false, "a worked-out reading is no member's to write");
+    });
+
+    await t.step("a virtual device's control holds what is set, and an automation hears it", async () => {
+      await anna.execString('echo on > /dev/indoors/away');
+      await until('away', async () => (await anna.execString('tail -n 1 /dev/indoors/away')).trim(), (text) => text.includes('true'));
+      await anna.execString('echo toggle > /dev/indoors/away');
+      await until('back', async () => (await anna.execString('tail -n 1 /dev/indoors/away')).trim(), (text) => text.includes('false'));
+      assertEquals((await anna.exec('echo 40 > /dev/indoors/setpoint')).success, false, 'a setpoint keeps to its range');
+      await anna.execString(
+        `automation-set away --yaml ${
+          quoted('nodes: {away: {type: device, endpoint: indoors/away, to: [note]}, note: {type: shell, run: \'echo "$VALUE" > /home/anna/away.txt\'}}')
+        }`,
+      );
+      await running('away');
+      await anna.execString('echo on > /dev/indoors/away');
+      await until('away.txt', () => admin.execString('cat /home/anna/away.txt'), (text) => text.trim() === 'on');
+    });
+
+    await t.step('a virtual device may not read what the devices group may not, nor itself', async () => {
+      await admin.execString('chmod 600 /dev/hall-sensor/temperature');
+      assertEquals((await anna.exec(`device-create narrowed --driver virtual --config ${quoted('read=t=avg hall-sensor/temperature')}`)).success, false);
+      assertEquals((await anna.exec(`device-create loop --driver virtual --config ${quoted('read=t=last loop/t')}`)).success, false);
+    });
+
     await t.step('only the automation group reads and writes automations', async () => {
       assertEquals((await carl.exec('ls /etc/automations')).success, false);
       assertEquals((await carl.exec('automation-new mine')).success, false);

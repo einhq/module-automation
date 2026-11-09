@@ -32,7 +32,14 @@ Deno.test({ name: 'without a broker, the devices asked over the network are read
     const status = await until('running', () => admin.execJson<AutomationStatus>('automation-status'), (status) => status.running);
     assertEquals([status.configured, status.connected, status.drivers], [false, false, ['network', 'ipp', 'snmp', 'cast', 'http']]);
     const drivers = await admin.execJson<DriverSummary[]>('devices --drivers');
-    assertEquals(drivers.filter((driver) => driver.module === 'automation' && driver.running).map((driver) => driver.name), ['cast', 'http', 'ipp', 'network', 'snmp']);
+    assertEquals(drivers.filter((driver) => driver.module === 'automation' && driver.running).map((driver) => driver.name), [
+      'cast',
+      'http',
+      'ipp',
+      'network',
+      'snmp',
+      'virtual',
+    ]);
 
     await admin.execString(`device-create Weather --driver http --config 'url=http://127.0.0.1:${server.addr.port}/' --config 'read=temperature=current.temperature_2m °C'`);
     const info = await until('read', () => admin.execJson<DeviceInfo>('device-show weather'), (info) => info.online === true);
