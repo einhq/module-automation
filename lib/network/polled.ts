@@ -9,8 +9,8 @@
  *   volume's use and its temperatures, from the standard MIBs (Host Resources, net-snmp's UCD);
  * - `cast`: a Google Cast device; whether it plays and what (title, artist and app as one line), its
  *   volume and mute, which can be set, and play, pause and stop;
- * - `http`: a web API that answers JSON, at an address rather than a host (`http.ts`): a Shelly's or
- *   Tasmota's own, the weather, the price of electricity; the readings a person names in it, and
+ * - `http`: a web API that answers JSON, at an address rather than a host (`http.ts`): a device's
+ *   own, the weather, the price of electricity; the readings a person names in it, and
  *   the controls, each an address asked to set it.
  *
  * Each poll says what the device is as the sources do (`DeviceChange`s), which the device writer
@@ -265,7 +265,7 @@ const cast: PolledDriver = {
 
 const createHttp = (fetcher: Fetch): PolledDriver => ({
   name: 'http',
-  description: 'A web API that answers JSON: a Shelly or Tasmota asked over HTTP, the weather, the price of electricity; the readings and controls you name in it',
+  description: 'A web API that answers JSON: a device on the network with an API of its own, the weather, the price of electricity; the readings and controls you name in it',
   intervalMs: intervalOf(undefined),
   intervalOf: (config) => intervalOf(config.interval),
   addressed: false,

@@ -22,8 +22,10 @@ else that answers SNMP (uptime, load, memory, each volume's use, temperatures; t
 `CFG_AUTOMATION_SNMP_COMMUNITY`), and `network` for the rest (whether it answers, and how fast).
 `automation-snmp <host> [oid]` walks what a device's agent answers. The `http` driver asks a web
 API that answers JSON, made by hand with `device-create <name> --driver http --config url=… --config
-read=…`: a Shelly or Tasmota over HTTP, the weather, the price of electricity, each reading a path
-in the answer (`temperature=current.temperature_2m °C`, `price=[time_start..time_end].SEK_per_kWh`). `automation-ignore` leaves one out. The Devices page shows how
+read=…`: a device on the network with an API of its own, the weather, the price of electricity, each
+reading a path in the answer (`temperature=current.temperature_2m °C`,
+`price=[time_start..time_end].SEK_per_kWh`), and `--config set=…` the controls, each an address asked
+to set it (`pump=api/pump?run={value} 1/0`). `automation-ignore` leaves one out. The Devices page shows how
 many can be added, and opens them as a page of their own.
 
 The devices, their pages and the device commands are EiN core's; this module brings the drivers and
