@@ -1,5 +1,5 @@
 /**
- * Durations as rules take them: `30s`, `15m`, `24h`, `7d`.
+ * Durations as automations take them: `30s`, `15m`, `24h`, `7d`.
  */
 
 const SCALE: Record<string, number> = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };

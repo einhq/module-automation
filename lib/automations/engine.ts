@@ -70,7 +70,7 @@ export type LocalTime = {
   weekday: number;
 };
 
-export type EngineOptions = {
+type EngineOptions = {
   /** Call `fn` after `ms`, and answer how to call it off. */
   schedule(fn: () => void, ms: number): () => void;
   now(): number;
@@ -112,6 +112,14 @@ const inWindow = (local: LocalTime, from: number, to: number, days?: number[]): 
   return from <= to ? local.minute >= from && local.minute < to : local.minute >= from || local.minute < to;
 };
 
+/** What an automation reads: the endpoints its device nodes listen to and its controls write, the devices whose coming and going it follows. */
+type Reads = { endpoints: string[]; controls: string[]; devices: string[] };
+
+export const readsOf = (automation: Automation): Reads => {
+  const of = (type: string, key: string) => [...new Set([...automation.nodes.values()].filter((node) => node.type === type).map((node) => node.config[key] as string))];
+  return { endpoints: of('device', 'endpoint'), controls: of('control', 'endpoint'), devices: of('online', 'device') };
+};
+
 export class AutomationEngine {
   private readonly states = new Map<string, NodeState>();
   /** The latest reading of each endpoint it reads or writes, `<device>/<endpoint>`. */
@@ -125,10 +133,9 @@ export class AutomationEngine {
     for (const id of automation.nodes.keys()) this.states.set(id, { messages: 0, inputs: new Map(), timers: [] });
   }
 
-  /** What it reads: the endpoints its device nodes listen to and its controls write, the devices whose coming and going it follows. */
-  reads(): { endpoints: string[]; controls: string[]; devices: string[] } {
-    const of = (type: string, key: string) => [...new Set([...this.automation.nodes.values()].filter((node) => node.type === type).map((node) => node.config[key] as string))];
-    return { endpoints: of('device', 'endpoint'), controls: of('control', 'endpoint'), devices: of('online', 'device') };
+  /** What it reads and writes. */
+  reads(): Reads {
+    return readsOf(this.automation);
   }
 
   /**
@@ -228,12 +235,13 @@ export class AutomationEngine {
 
   /**
    * Take up the deadlines a run before a restart waited for. A timer or held node that priming set
-   * going already keeps its own; one due by now is done at once, logged as late.
+   * going already keeps its own; one due by now is done at once, logged as late, unless it is later
+   * than `maxLateMs`: after a long stop the automation starts afresh from its readings.
    */
-  restore(deadlines: Deadline[]): void {
+  restore(deadlines: Deadline[], maxLateMs = Infinity): void {
     for (const deadline of deadlines) {
       const node = this.automation.nodes.get(deadline.node);
-      if (!node) continue;
+      if (!node || this.options.now() - deadline.due > maxLateMs) continue;
       const state = this.state(node.id);
       const message: Message = { value: deadline.value ?? null, topic: deadline.topic ?? node.id, at: deadline.due, hops: 0 };
       const late = deadline.due < this.options.now();

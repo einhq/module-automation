@@ -1,0 +1,45 @@
+#!ts
+/**
+ * automation-show — an automation: its YAML, whose it is, whether it runs and what is wrong with it.
+ * In JSON mode also its graph, every node placed.
+ *
+ *   automation-show hall-light
+ *   automation-show media/gpu-hot     a module's
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { AutomationDetail } from '@automation/api';
+import { detailOf, problemLines, readAs, resolveAutomation } from '@automation/automation-commands';
+
+const automationShow = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  try {
+    const { path } = resolveAutomation(String(flags._[0] ?? ''));
+    const detail = await detailOf(cmd, await readAs(cmd, path));
+    if (cmd.json) {
+      await cmd.writeJSON(detail satisfies AutomationDetail);
+      return 0;
+    }
+    await cmd.writeLn(`# ${detail.path}, runs as ${detail.owner}: ${!detail.enabled ? 'off' : detail.running ? 'running' : 'not running'}`);
+    for (const line of problemLines(detail.problems)) await cmd.writeLn(`#${line}`);
+    await cmd.write(detail.text.endsWith('\n') ? detail.text : `${detail.text}\n`);
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`automation-show: ${error instanceof Error ? error.message : error}\n`);
+    return 1;
+  }
+};
+
+automationShow.spec = {
+  name: 'automation-show',
+  effect: 'read' as const,
+  description: "An automation's YAML, whose it is, whether it runs and what is wrong with it; in JSON mode also its graph with every node placed",
+  args: [{ name: 'automation', type: 'string' as const, description: '<name>, <module>/<name>, or its file' }],
+  examples: ['automation-show hall-light'],
+  returns: 'AutomationDetail: name, path, module, owner, description, enabled, running, nodes, problems, writable, text, spec',
+};
+
+export default automationShow;

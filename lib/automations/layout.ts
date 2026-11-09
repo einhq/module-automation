@@ -7,10 +7,10 @@
  */
 
 /** The width of a column and the height of a row on the canvas. */
-export const COLUMN = 240;
-export const ROW = 110;
+const COLUMN = 240;
+const ROW = 110;
 
-export type LayoutNode = { id: string; pos?: [number, number]; targets: string[] };
+type LayoutNode = { id: string; pos?: [number, number]; targets: string[] };
 
 /** A place for each node without one, by id. The wires must not go round in a circle. */
 export const placeNodes = (nodes: LayoutNode[]): Map<string, [number, number]> => {

@@ -1,0 +1,6 @@
+{
+  "description": "Runs the automations under /etc/automations and /etc/automations.d, each as its owner, when a reading, a press, a device coming or going or the clock says so",
+  "restartPolicy": "on-failure",
+  "workClass": "background",
+  "statusCommand": "automation-status --automations"
+}

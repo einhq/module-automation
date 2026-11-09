@@ -1,0 +1,56 @@
+#!ts
+/**
+ * automation-new — make an automation, empty or from a starting point.
+ *
+ *   automation-new hall-light                      an empty one, /etc/automations/hall-light.yaml
+ *   automation-new hall-light --from motion-light  from a starting point
+ *   automation-new --examples                      the starting points
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { AutomationSetAnswer } from '@automation/api';
+import { resolveAutomation } from '@automation/automation-commands';
+import { parseAutomationText, writeText } from '@automation/automation-files';
+import { EXAMPLES } from '@automation/automations/examples';
+
+const automationNew = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['from'], boolean: ['examples'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  if (flags.examples) {
+    if (cmd.json) await cmd.writeJSON(EXAMPLES.map(({ name, label, description }) => ({ name, label, description })));
+    else for (const example of EXAMPLES) await cmd.writeLn(`${example.name}\t${example.description}`);
+    return 0;
+  }
+  try {
+    const { name, path } = resolveAutomation(String(flags._[0] ?? ''));
+    if (name.includes('/')) throw new Error("a module's automations come with the module; name yours without a /");
+    const example = EXAMPLES.find((each) => each.name === (flags.from ?? 'empty'));
+    if (!example) throw new Error(`there is no starting point ${flags.from}; there are ${EXAMPLES.map((each) => each.name).join(', ')}`);
+    if (await cmd.sys.vfs.exists(cmd.access, path)) throw new Error(`${name} exists already: automation-set ${name} changes it`);
+    await writeText(cmd.sys.vfs, cmd.access, path, example.yaml);
+    const answer: AutomationSetAnswer = { name, path, written: true, created: true, problems: parseAutomationText(example.yaml).problems };
+    if (cmd.json) await cmd.writeJSON(answer satisfies AutomationSetAnswer);
+    else await cmd.writeLn(`made ${path}${example.name === 'empty' ? '' : ` from ${example.name}: change its devices to yours`}`);
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`automation-new: ${error instanceof Error ? error.message : error}\n`);
+    return 1;
+  }
+};
+
+automationNew.spec = {
+  name: 'automation-new',
+  effect: 'write' as const,
+  description: 'Make an automation under /etc/automations, empty or from a starting point (members of the automation group)',
+  args: [{ name: 'name', type: 'string' as const, description: 'its name: letters, digits, ., - and _' }],
+  flags: [
+    { name: 'from', type: 'string' as const, description: 'a starting point: motion-light, button-toggle, heater, morning' },
+    { name: 'examples', type: 'bool' as const, description: 'list the starting points', writes: false },
+  ],
+  examples: ['automation-new hall-light --from motion-light', 'automation-new --examples'],
+  returns: 'AutomationSetAnswer: name, path, written, created, problems',
+};
+
+export default automationNew;

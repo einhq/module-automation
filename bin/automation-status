@@ -1,22 +1,24 @@
 #!ts
 /**
  * automation-status — whether the bridge hears the broker, which drivers it registered, how many
- * devices they drive, and the rules.
+ * devices they drive, and the automations; or what each node of one automation last did.
  *
- *   automation-status            everything, as JSON in JSON mode
- *   automation-status --brief    one line, for the services list
- *   automation-status --checks   the checks `health` reads
- *   automation-status --rules    one line on the rules service
+ *   automation-status                 everything, as JSON in JSON mode
+ *   automation-status --brief         one line, for the services list
+ *   automation-status --checks        the checks `health` reads
+ *   automation-status --automations   one line on the automation engine
+ *   automation-status hall-light      each node of a running automation: what it last sent, when, what it waits for
  */
 
 import type { DeviceAttrs } from '@ein/api';
 import type { CmdReturn, Command, HealthCheck } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import { DEV_PATH, devicePath } from '@ein/paths';
-import type { AutomationStatus } from '@automation/api';
+import type { AutomationRunStatus, AutomationStatus } from '@automation/api';
+import { mayChange, readAs, resolveAutomation } from '@automation/automation-commands';
 import { POLLED_DRIVERS } from '@automation/network';
 import { SOURCE_NAMES } from '@automation/sources';
-import { bridgeState, rulesState } from '@automation/state';
+import { bridgeState, engineState } from '@automation/state';
 
 const ENDPOINT_TYPES = new Set(['log', 'track', 'control']);
 
@@ -33,7 +35,7 @@ const counts = async (cmd: Command): Promise<{ devices: number; endpoints: numbe
 const statusOf = async (cmd: Command): Promise<AutomationStatus> => {
   const url = (cmd.env.CFG_AUTOMATION_MQTT_URL ?? '').trim();
   const state = bridgeState();
-  const rules = rulesState();
+  const engine = engineState();
   return {
     configured: url !== '',
     ...(url ? { url } : {}),
@@ -45,7 +47,29 @@ const statusOf = async (cmd: Command): Promise<AutomationStatus> => {
     messages: state?.messages ?? 0,
     unsupported: state?.notes() ?? [],
     ...(state?.lastError ? { lastError: state.lastError } : {}),
-    ...(rules ? { rules: { count: rules.rules(), runs: rules.runs, problems: rules.problems() } } : {}),
+    ...(engine ? { automations: automationsOf(engine) } : {}),
+  };
+};
+
+const automationsOf = (engine: NonNullable<ReturnType<typeof engineState>>): NonNullable<AutomationStatus['automations']> => {
+  const known = [...engine.known()];
+  return {
+    running: known.filter(([, each]) => each.running).length,
+    actions: engine.actions,
+    problems: known.filter(([, each]) => each.problems.length).map(([name, each]) => `${name}: ${each.problems[0].message}`),
+  };
+};
+
+/** One automation's nodes, for whoever may change it: what its nodes say is its owner's to see. */
+const runStatus = async (cmd: Command, arg: string): Promise<AutomationRunStatus> => {
+  const file = await readAs(cmd, resolveAutomation(arg).path);
+  if (!(await mayChange(cmd, file))) throw new Error(`what ${file.name}'s nodes say is for those who may change it`);
+  const known = engineState()?.known().get(file.name);
+  return {
+    name: file.name,
+    running: known?.running ?? false,
+    problems: file.problems.length ? file.problems : known?.problems ?? [],
+    nodes: engineState()?.status(file.name) ?? {},
   };
 };
 
@@ -67,12 +91,34 @@ const checks = (status: AutomationStatus): HealthCheck[] => {
 
 const automationStatus = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
-  const flags = parseArgs(cmd.args, { boolean: ['brief', 'checks', 'rules'], unknown: collectUnknownFlags(unknown) });
+  const flags = parseArgs(cmd.args, { boolean: ['brief', 'checks', 'automations'], unknown: collectUnknownFlags(unknown) });
   if (await reportUnknownFlags(cmd, unknown)) return 1;
+  if (flags._.length) {
+    try {
+      const run = await runStatus(cmd, String(flags._[0]));
+      if (cmd.json) await cmd.writeJSON(run satisfies AutomationRunStatus);
+      else {
+        await cmd.writeLn(`${run.name}: ${run.running ? 'running' : 'not running'}`);
+        for (const problem of run.problems) await cmd.writeLn(`  ${problem.node ? `${problem.node}: ` : ''}${problem.message}`);
+        for (const [id, node] of Object.entries(run.nodes)) {
+          const said = node.value !== undefined ? ` sent ${JSON.stringify(node.value)}${node.at ? ` at ${node.at}` : ''}` : '';
+          await cmd.writeLn(`  ${id}:${said}${node.due ? `, next at ${node.due}` : ''}${node.problem ? `; ${node.problem}` : ''}`);
+        }
+      }
+      return 0;
+    } catch (error) {
+      await cmd.writeError(`automation-status: ${error instanceof Error ? error.message : error}\n`);
+      return 1;
+    }
+  }
   const status = await statusOf(cmd);
-  if (flags.rules) {
-    const rules = status.rules;
-    await cmd.writeLn(rules ? `${rules.count} rules, ${rules.runs} runs${rules.problems.length ? `, ${rules.problems.length} not run` : ''}` : 'not running');
+  if (flags.automations) {
+    const automations = status.automations;
+    await cmd.writeLn(
+      automations
+        ? `${automations.running} running, ${automations.actions} actions${automations.problems.length ? `, ${automations.problems.length} not run` : ''}`
+        : 'not running',
+    );
   } else if (flags.checks) {
     await cmd.writeJSON(checks(status) satisfies HealthCheck[]);
   } else if (flags.brief || !cmd.json) {
@@ -80,8 +126,8 @@ const automationStatus = async (cmd: Command): CmdReturn => {
     if (!flags.brief) {
       if (status.drivers.length) await cmd.writeLn(`drivers: ${status.drivers.join(', ')}`);
       for (const note of status.unsupported) await cmd.writeLn(`  not read: ${note}`);
-      if (status.rules) await cmd.writeLn(`rules: ${status.rules.count}, ${status.rules.runs} runs`);
-      for (const problem of status.rules?.problems ?? []) await cmd.writeLn(`  not run: ${problem}`);
+      if (status.automations) await cmd.writeLn(`automations: ${status.automations.running} running, ${status.automations.actions} actions`);
+      for (const problem of status.automations?.problems ?? []) await cmd.writeLn(`  not run: ${problem}`);
     }
   } else {
     await cmd.writeJSON(status satisfies AutomationStatus);
@@ -93,14 +139,16 @@ automationStatus.spec = {
   name: 'automation-status',
   effect: 'read' as const,
   description:
-    'Whether the automation bridge hears the MQTT broker, which drivers it registered, how many devices under /dev they drive, what they cannot read, and the rules',
+    'Whether the automation bridge hears the MQTT broker, which drivers it registered, how many devices under /dev they drive, what they cannot read, and the automations; or, given one, what each of its nodes last did',
   flags: [
     { name: 'brief', type: 'bool' as const, description: 'one line, as the services list shows it' },
     { name: 'checks', type: 'bool' as const, description: 'the checks health reads, as JSON' },
-    { name: 'rules', type: 'bool' as const, description: 'one line on the rules service, as the services list shows it' },
+    { name: 'automations', type: 'bool' as const, description: 'one line on the automation engine, as the services list shows it' },
   ],
-  examples: ['automation-status', 'automation-status --brief'],
-  returns: 'AutomationStatus: configured, url, running, connected, since, drivers, devices, endpoints, messages, unsupported, lastError, rules {count, runs, problems}',
+  args: [{ name: 'automation', type: 'string' as const, description: 'one automation, whose nodes to show', optional: true }],
+  examples: ['automation-status', 'automation-status --brief', 'automation-status hall-light'],
+  returns:
+    'AutomationStatus: configured, url, running, connected, since, drivers, devices, endpoints, messages, unsupported, lastError, automations {running, actions, problems}; with an automation, AutomationRunStatus: name, running, problems, nodes',
 };
 
 export default automationStatus;

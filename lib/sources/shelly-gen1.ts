@@ -52,7 +52,7 @@ const MODELS: Record<string, string> = {
   'SHEM': 'EM',
 };
 
-/** A press as a Shelly codes it, in the words a rule says: `S` is `single`. */
+/** A press as a Shelly codes it, in the words an automation says: `S` is `single`. */
 const PRESSES: Record<string, string> = { S: 'single', SS: 'double', SSS: 'triple', L: 'long', SL: 'single-long', LS: 'long-single' };
 
 const WATT_MINUTES_PER_WH = 60;

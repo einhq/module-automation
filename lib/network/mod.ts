@@ -53,7 +53,9 @@ export const readIgnored = async (cmd: Command): Promise<Set<string>> => {
 
 export const writeIgnored = async (cmd: Command, ids: Set<string>): Promise<void> => {
   const at = NETWORK_IGNORED.lastIndexOf('/');
-  await cmd.sys.vfs.ensure(ADMIN_ACCESS, 'file', NETWORK_IGNORED.slice(0, at), NETWORK_IGNORED.slice(at + 1), { props: { mode: 0o644 } });
+  const dir = NETWORK_IGNORED.slice(0, at);
+  await cmd.sys.vfs.ensure(ADMIN_ACCESS, 'directory', dir.slice(0, dir.lastIndexOf('/')) || '/', dir.slice(dir.lastIndexOf('/') + 1), { props: { mode: 0o755 } });
+  await cmd.sys.vfs.ensure(ADMIN_ACCESS, 'file', dir, NETWORK_IGNORED.slice(at + 1), { props: { mode: 0o644 } });
   const handle = await cmd.sys.vfs.open(ADMIN_ACCESS, NETWORK_IGNORED, { mode: 'w' });
   try {
     await handle.write(new TextEncoder().encode([...ids].sort().map((id) => `${id}\n`).join('')));

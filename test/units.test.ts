@@ -1,5 +1,5 @@
 /**
- * The small rules: which templates are read, how labels are made, how a rule's durations read.
+ * The small rules: which templates are read, how labels are made, how an automation's durations read.
  */
 
 import { assertEquals } from '@std/assert';

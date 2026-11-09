@@ -1,0 +1,45 @@
+#!ts
+/**
+ * automation-trigger — press a button node of a running automation, as its owner would: what it is
+ * wired to runs now.
+ *
+ *   automation-trigger hall-light try-it
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { mayChange, readAs, resolveAutomation } from '@automation/automation-commands';
+import { engineState } from '@automation/state';
+
+const automationTrigger = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  try {
+    const file = await readAs(cmd, resolveAutomation(String(flags._[0] ?? '')).path);
+    const node = String(flags._[1] ?? '');
+    if (!node) throw new Error('name the button node to press');
+    if (!(await mayChange(cmd, file))) throw new Error(`only those who may change ${file.name} press its buttons: it acts as its owner`);
+    const engine = engineState();
+    if (!engine) throw new Error('the automation-engine service is not running');
+    engine.press(file.name, node);
+    if (cmd.json) await cmd.writeJSON({ ok: true });
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`automation-trigger: ${error instanceof Error ? error.message : error}\n`);
+    return 1;
+  }
+};
+
+automationTrigger.spec = {
+  name: 'automation-trigger',
+  effect: 'write' as const,
+  description: 'Press a button node of a running automation: what it is wired to runs now, as its owner',
+  args: [
+    { name: 'automation', type: 'string' as const, description: '<name>, <module>/<name>, or its file' },
+    { name: 'node', type: 'string' as const, description: 'the button node' },
+  ],
+  examples: ['automation-trigger hall-light try-it'],
+};
+
+export default automationTrigger;

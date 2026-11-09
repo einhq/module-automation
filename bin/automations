@@ -1,0 +1,43 @@
+#!ts
+/**
+ * automations — the automations, whose each is, whether it runs, and what is wrong with those that
+ * do not.
+ *
+ *   automations            people's under /etc/automations, then modules' under /etc/automations.d
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { AutomationSummary } from '@automation/api';
+import { problemLines, summaryOf } from '@automation/automation-commands';
+import { accounts, readAutomationFiles } from '@automation/automation-files';
+
+const automations = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  const names = accounts(cmd.sys.vfs);
+  const list: AutomationSummary[] = [];
+  for (const file of await readAutomationFiles(cmd.sys.vfs, cmd.access)) list.push(await summaryOf(cmd, file, names));
+  if (cmd.json) {
+    await cmd.writeJSON(list satisfies AutomationSummary[]);
+    return 0;
+  }
+  if (!list.length) await cmd.writeLn('no automations; automation-new <name> makes one');
+  for (const each of list) {
+    const state = !each.enabled ? 'off' : each.running ? 'running' : 'not running';
+    await cmd.writeLn(`${each.name}\t${state}\t${each.owner}\t${each.description ?? ''}`);
+    for (const line of problemLines(each.problems)) await cmd.writeLn(line);
+  }
+  return 0;
+};
+
+automations.spec = {
+  name: 'automations',
+  effect: 'read' as const,
+  description: 'The automations, whose each is, whether it runs, and what is wrong with those that do not',
+  examples: ['automations'],
+  returns: 'AutomationSummary[]: name, path, module, owner, description, enabled, running, nodes, problems, writable',
+};
+
+export default automations;

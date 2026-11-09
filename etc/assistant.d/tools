@@ -4,4 +4,6 @@ devices
 device-show
 device-history
 automation-status
-automation-rule-check
+automations
+automation-show
+automation-check

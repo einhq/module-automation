@@ -3,7 +3,7 @@
  * purpose: a page imports it without pulling in the module's commands.
  */
 
-/** `automation-status`: the bridge and its drivers, as this process sees them, and the rules. */
+/** `automation-status`: the bridge and its drivers, as this process sees them, and the automations. */
 export type AutomationStatus = {
   /** False when the broker address is unset: only the devices asked over the network are read. */
   configured: boolean;
@@ -24,8 +24,8 @@ export type AutomationStatus = {
   /** What the drivers cannot read, as `<device>/<entity>: why`. */
   unsupported: string[];
   lastError?: string;
-  /** The rules service, when it runs in this process. */
-  rules?: { count: number; runs: number; problems: string[] };
+  /** The automation engine, when it runs in this process: how many it runs, the actions they took, and those held back. */
+  automations?: { running: number; actions: number; problems: string[] };
 };
 
 /** What an automation's messages carry: a device's reading, a word, a number. */
@@ -67,20 +67,48 @@ export type AutomationNodeStatus = {
   messages: number;
 };
 
-/** `automation-rule-check`: a rule file as the rules service reads it, and what its conditions say now. */
-export type RuleCheck = {
+/** `automations`: an automation, whose it is, whether it runs, and what is wrong with it. */
+export type AutomationSummary = {
+  /** `<name>`, or `<module>/<name>` for a module's. */
   name: string;
   path: string;
-  /** The account its lines run as. */
+  /** The module it came with; a module's runs as the administrator and is not changed in place. */
+  module?: string;
+  /** The account it runs as. */
   owner: string;
-  /** Why the service does not run it. */
-  problem?: string;
   description?: string;
-  when?: string[];
-  if?: { condition: string; holds: boolean }[];
-  then?: string[];
-  /** With `--run`: each line run, as the caller, until one failed. */
-  ran?: { line: string; code: number }[];
+  enabled: boolean;
+  /** Whether the engine runs it now. */
+  running: boolean;
+  nodes: number;
+  /** Why it does not run: its own problems, or the engine's (an endpoint its owner may not read). */
+  problems: AutomationProblem[];
+  /** Whether the caller may change it. */
+  writable: boolean;
+};
+
+/** `automation-show`: an automation's file, and its graph with every node placed. */
+export type AutomationDetail = AutomationSummary & {
+  /** The YAML as the file has it. */
+  text: string;
+  /** Its parsed YAML, a node without `pos` given one; absent when it is not YAML. */
+  spec?: AutomationSpec;
+};
+
+/** `automation-set`: whether it was written, and what is wrong with it. */
+export type AutomationSetAnswer = { name: string; path: string; written: boolean; created: boolean; problems: AutomationProblem[] };
+
+/** `automation-status <name>`: what each node of a running automation last did. */
+export type AutomationRunStatus = { name: string; running: boolean; problems: AutomationProblem[]; nodes: Record<string, AutomationNodeStatus> };
+
+/** `automation-check`: what is wrong with an automation, and what each node would say now, read as the caller. */
+export type AutomationCheck = {
+  name?: string;
+  problems: AutomationProblem[];
+  /** Each node's state after the latest readings the caller may read went through it, no action run. */
+  nodes: Record<string, AutomationNodeStatus>;
+  /** The endpoints it reads and writes, and what the caller finds there. */
+  endpoints: { endpoint: string; readable: boolean; value?: AutomationValue; at?: string }[];
 };
 
 /**

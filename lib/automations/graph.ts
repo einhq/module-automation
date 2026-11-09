@@ -19,14 +19,14 @@ import type { Test } from './values.ts';
 import { parseDuration } from '../time.ts';
 
 /** The most nodes an automation has. */
-export const MAX_NODES = 200;
+const MAX_NODES = 200;
 
 const ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const DAY_NAMES = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const FULL_DAY_NAMES = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
 /** A setting as the engine reads it. */
-export type Setting = Value | number[] | Expression | { name: string; test: Test }[];
+type Setting = Value | number[] | Expression | { name: string; test: Test }[];
 
 export type Node = {
   id: string;

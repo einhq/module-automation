@@ -1,0 +1,80 @@
+#!ts
+/**
+ * automation-check — what is wrong with an automation, and what each of its nodes would say now:
+ * the latest readings the caller may read sent through it, no action run.
+ *
+ *   automation-check hall-light
+ *   automation-check --yaml "$text"     a draft, before it is written
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { AutomationCheck, AutomationValue } from '@automation/api';
+import { problemLines, readAs, resolveAutomation } from '@automation/automation-commands';
+import { endpointState, localTime, onlineOf, parseAutomationText } from '@automation/automation-files';
+import { AutomationEngine, readsOf } from '@automation/automations/engine';
+
+const automationCheck = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['yaml'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  try {
+    let name: string | undefined;
+    let read: ReturnType<typeof parseAutomationText>;
+    let problems;
+    if (flags.yaml !== undefined) {
+      read = parseAutomationText(flags.yaml);
+      problems = read.problems;
+    } else {
+      const file = await readAs(cmd, resolveAutomation(String(flags._[0] ?? '')).path);
+      name = file.name;
+      read = file;
+      problems = file.problems;
+    }
+    const check: AutomationCheck = { ...(name ? { name } : {}), problems, nodes: {}, endpoints: [] };
+    if (read.automation) {
+      const { endpoints, controls, devices } = readsOf(read.automation);
+      const values = new Map<string, { value: AutomationValue; at: number }>();
+      for (const endpoint of new Set([...endpoints, ...controls])) {
+        const state = await endpointState(cmd.sys.vfs, cmd.access, endpoint);
+        check.endpoints.push({
+          endpoint,
+          readable: state.readable,
+          ...(state.value !== undefined ? { value: state.value } : {}),
+          ...(state.at ? { at: new Date(state.at).toISOString() } : {}),
+        });
+        if (state.value !== undefined && state.at !== undefined) values.set(endpoint, { value: state.value, at: state.at });
+      }
+      const engine = new AutomationEngine(name ?? 'draft', read.automation, { schedule: () => () => {}, now: Date.now, localTime, act: () => Promise.resolve() });
+      engine.prime({ values, online: await onlineOf(cmd.sys.vfs, cmd.access, devices) });
+      check.nodes = engine.status();
+      engine.stop();
+    }
+    if (cmd.json) {
+      await cmd.writeJSON(check satisfies AutomationCheck);
+    } else {
+      await cmd.writeLn(problems.length ? `${name ?? 'it'} has problems:` : `${name ?? 'it'} has no problems`);
+      for (const line of problemLines(problems)) await cmd.writeLn(line);
+      for (const each of check.endpoints) {
+        await cmd.writeLn(`  ${each.endpoint}: ${!each.readable ? 'you may not read it' : each.value === undefined ? 'no reading yet' : JSON.stringify(each.value)}`);
+      }
+      for (const [id, status] of Object.entries(check.nodes)) if (status.value !== undefined) await cmd.writeLn(`  ${id} says ${JSON.stringify(status.value)}`);
+    }
+    return problems.length ? 1 : 0;
+  } catch (error) {
+    await cmd.writeError(`automation-check: ${error instanceof Error ? error.message : error}\n`);
+    return 1;
+  }
+};
+
+automationCheck.spec = {
+  name: 'automation-check',
+  effect: 'read' as const,
+  description: 'What is wrong with an automation, and what each of its nodes would say now, from the latest readings the caller may read; no action is run',
+  args: [{ name: 'automation', type: 'string' as const, description: '<name>, <module>/<name>, or its file' }],
+  flags: [{ name: 'yaml', type: 'string' as const, description: 'check this YAML instead, a draft not yet written' }],
+  examples: ['automation-check hall-light'],
+  returns: 'AutomationCheck: name, problems, nodes (each node: value, at, due, problem, messages), endpoints (endpoint, readable, value, at)',
+};
+
+export default automationCheck;

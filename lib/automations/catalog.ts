@@ -3,10 +3,12 @@
  * input, and which outputs it sends on. The validator, the engine and the editor's palette and forms
  * all read this; nothing else says what a kind takes.
  *
- * Import-free, so a page imports it as the engine does.
+ * Import-free but for its own module's files, so a page imports it as the engine does.
  */
 
-export type SettingType =
+import { AGGREGATES } from './values.ts';
+
+type SettingType =
   /** `<device>/<endpoint>`. */
   | 'endpoint'
   /** A device's name. */
@@ -39,7 +41,7 @@ export type SettingSpec = {
   help?: string;
 };
 
-export type NodeGroup = 'input' | 'logic' | 'value' | 'time' | 'action';
+type NodeGroup = 'input' | 'logic' | 'value' | 'time' | 'action';
 
 export type KindSpec = {
   type: string;
@@ -72,8 +74,6 @@ const TESTS: SettingSpec[] = [
   { name: 'above', type: 'number', label: 'Above' },
   { name: 'below', type: 'number', label: 'Below' },
 ];
-
-export const AGGREGATE_CHOICES = ['avg', 'min', 'max', 'sum', 'count', 'any', 'all', 'last'] as const;
 
 const kinds: KindSpec[] = [
   {
@@ -206,7 +206,7 @@ const kinds: KindSpec[] = [
     description: 'The average, least, most, sum or count of what is wired in',
     input: true,
     outputs: OUT,
-    settings: [{ name: 'fn', type: 'choice', label: 'Of', required: true, choices: AGGREGATE_CHOICES }, EVERY],
+    settings: [{ name: 'fn', type: 'choice', label: 'Of', required: true, choices: AGGREGATES }, EVERY],
   },
   {
     type: 'set',
@@ -335,11 +335,3 @@ const kinds: KindSpec[] = [
 ];
 
 export const KINDS: Readonly<Record<string, KindSpec>> = Object.fromEntries(kinds.map((kind) => [kind.type, kind]));
-
-export const GROUPS: readonly { group: NodeGroup; label: string }[] = [
-  { group: 'input', label: 'Inputs' },
-  { group: 'logic', label: 'Logic' },
-  { group: 'value', label: 'Values' },
-  { group: 'time', label: 'Time' },
-  { group: 'action', label: 'Actions' },
-];
