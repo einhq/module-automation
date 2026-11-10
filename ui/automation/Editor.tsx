@@ -1,8 +1,8 @@
-import { CodeMirror, EmptyState, PageLoader, TablerIcon } from '@ein/ui/components';
+import { CodeMirror, Dialog, DialogActions, EmptyState, PageLoader, TablerIcon } from '@ein/ui/components';
 import { useLogFollow, usePhone } from '@ein/ui/hooks';
 import { shq } from '@ein/ui/lib';
 import { execCommand, notify } from '@ein/ui/signals';
-import { ActionIcon, Badge, Box, Drawer, Group, Loader, Menu, Paper, Popover, ScrollArea, Stack, Switch, Text, Tooltip, UnstyledButton } from '@mantine/core';
+import { ActionIcon, Badge, Box, Button, Drawer, Group, Loader, Menu, Paper, Popover, ScrollArea, Stack, Switch, Text, Tooltip, UnstyledButton } from '@mantine/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { AutomationDetail, AutomationNodeStatus, AutomationProblem, AutomationRunStatus, AutomationSetAnswer, AutomationSpec } from '../../lib/api.ts';
@@ -278,10 +278,19 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
     setDirty('graph');
   };
 
+  /** The node asked to be removed, until the reader says yes or no. */
+  const [removing, setRemoving] = useState<string | null>(null);
+  /** A wire selected goes at once; a node selected is asked about first. */
   const removeSelected = () => {
     if (!editable || !selection) return;
-    change(selection.kind === 'node' ? removeNode(spec, selection.id) : disconnect(spec, selection.wire));
+    if (selection.kind === 'node') return setRemoving(selection.id);
+    change(disconnect(spec, selection.wire));
     setSelection(null);
+  };
+  const remove = (id: string) => {
+    change(removeNode(spec, id));
+    setSelection(null);
+    setRemoving(null);
   };
   useDeleteKey(tab === 'graph' && editable && selection !== null, removeSelected);
 
@@ -476,6 +485,17 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
             </>
           )
       )}
+      <Dialog opened={removing !== null} onClose={() => setRemoving(null)} title='Remove the node?' icon='trash' pattern='danger' size='sm' floating>
+        {removing && (
+          <Text size='sm'>
+            <b>{removing}</b> is taken out of the automation, with the wires into it and out of it.
+          </Text>
+        )}
+        <DialogActions>
+          <Button variant='default' onClick={() => setRemoving(null)}>Cancel</Button>
+          <Button color='red' onClick={() => removing && remove(removing)} data-autofocus>Remove the node</Button>
+        </DialogActions>
+      </Dialog>
       {tab === 'yaml' && (
         <Box h='100%' p='sm' pl={inset ? inset + 12 : undefined}>
           {dirty === 'graph' ? <EmptyState title='The graph is not saved yet'>{saveError ?? 'Its YAML is shown once it is.'}</EmptyState> : (

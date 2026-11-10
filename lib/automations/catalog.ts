@@ -73,10 +73,10 @@ const BOOL = ['out', 'true', 'false'] as const;
 const OUT = ['out'] as const;
 const EVERY: SettingSpec = { name: 'every', type: 'flag', label: 'Send every result', help: 'Send each result, not only when it changes' };
 const TESTS: SettingSpec[] = [
-  { name: 'is', type: 'value', label: 'Is' },
-  { name: 'not', type: 'value', label: 'Is not' },
-  { name: 'above', type: 'number', label: 'Above' },
-  { name: 'below', type: 'number', label: 'Below' },
+  { name: 'is', type: 'value', label: 'Is', help: 'The same value: on, 21, open' },
+  { name: 'not', type: 'value', label: 'Is not', help: 'Anything but this value' },
+  { name: 'above', type: 'number', label: 'Above', help: 'A number it must be over' },
+  { name: 'below', type: 'number', label: 'Below', help: 'A number it must be under' },
 ];
 
 const kinds: KindSpec[] = [
@@ -112,7 +112,7 @@ const kinds: KindSpec[] = [
     input: false,
     outputs: BOOL,
     boolean: true,
-    settings: [{ name: 'device', type: 'device', label: 'Device', required: true }, EVERY],
+    settings: [{ name: 'device', type: 'device', label: 'Device', required: true, help: 'The device to follow' }, EVERY],
   },
   {
     type: 'clock',
@@ -149,12 +149,12 @@ const kinds: KindSpec[] = [
     group: 'input',
     label: 'Link in',
     color: 'grape',
-    about: "Sends on whatever a **Link out** of the same **Name** sends, from any automation of the same owner: one automation's result becomes another's input.",
+    about: "Sends on whatever a **Link out** of the same **Link name** sends, from any automation of the same owner: one automation's result becomes another's input.",
     icon: 'link',
     description: "What a link out of the same name sends, from any of its owner's automations",
     input: false,
     outputs: OUT,
-    settings: [{ name: 'name', type: 'text', label: 'Name', required: true }],
+    settings: [{ name: 'name', type: 'text', label: 'Link name', required: true, help: "The same as a link out's, in any of its owner's automations" }],
   },
   {
     type: 'compare',
@@ -246,7 +246,7 @@ const kinds: KindSpec[] = [
     description: 'The average, least, most, sum or count of what is wired in',
     input: true,
     outputs: OUT,
-    settings: [{ name: 'fn', type: 'choice', label: 'Of', required: true, choices: AGGREGATES }, EVERY],
+    settings: [{ name: 'fn', type: 'choice', label: 'Of', required: true, choices: AGGREGATES, help: 'avg, min, max, sum, count, any, all or last' }, EVERY],
   },
   {
     type: 'set',
@@ -259,7 +259,7 @@ const kinds: KindSpec[] = [
     description: 'Sends a value of its own: a word, a number, or text with ${value} in it',
     input: true,
     outputs: OUT,
-    settings: [{ name: 'value', type: 'value', label: 'Value', required: true }],
+    settings: [{ name: 'value', type: 'value', label: 'Value', required: true, help: 'on, 21, or text with ${value} and ${topic}' }],
   },
   {
     type: 'delay',
@@ -271,7 +271,7 @@ const kinds: KindSpec[] = [
     description: 'Sends each value on, later',
     input: true,
     outputs: OUT,
-    settings: [{ name: 'for', type: 'duration', label: 'For', required: true }],
+    settings: [{ name: 'for', type: 'duration', label: 'For', required: true, help: '30s, 5m, 1h' }],
   },
   {
     type: 'timer',
@@ -285,7 +285,7 @@ const kinds: KindSpec[] = [
     input: true,
     outputs: BOOL,
     boolean: true,
-    settings: [{ name: 'off-after', type: 'duration', label: 'Off after', required: true }, EVERY],
+    settings: [{ name: 'off-after', type: 'duration', label: 'Off after', required: true, help: '5m after the value went false' }, EVERY],
   },
   {
     type: 'held',
@@ -298,7 +298,7 @@ const kinds: KindSpec[] = [
     input: true,
     outputs: BOOL,
     boolean: true,
-    settings: [{ name: 'for', type: 'duration', label: 'For', required: true }, EVERY],
+    settings: [{ name: 'for', type: 'duration', label: 'For', required: true, help: '10m: how long it must stay true' }, EVERY],
   },
   {
     type: 'debounce',
@@ -310,7 +310,7 @@ const kinds: KindSpec[] = [
     description: 'Sends the last value once none came for a while',
     input: true,
     outputs: OUT,
-    settings: [{ name: 'for', type: 'duration', label: 'Quiet for', required: true }],
+    settings: [{ name: 'for', type: 'duration', label: 'Quiet for', required: true, help: '2s with nothing coming' }],
   },
   {
     type: 'throttle',
@@ -322,7 +322,7 @@ const kinds: KindSpec[] = [
     description: 'Sends at most one value in a while, and the newest at its end',
     input: true,
     outputs: OUT,
-    settings: [{ name: 'for', type: 'duration', label: 'At most once in', required: true }],
+    settings: [{ name: 'for', type: 'duration', label: 'At most once in', required: true, help: '1m' }],
   },
   {
     type: 'between',
@@ -337,9 +337,9 @@ const kinds: KindSpec[] = [
     outputs: BOOL,
     boolean: true,
     settings: [
-      { name: 'from', type: 'time', label: 'From', required: true },
-      { name: 'until', type: 'time', label: 'Until', required: true },
-      { name: 'days', type: 'days', label: 'Days' },
+      { name: 'from', type: 'time', label: 'From', required: true, help: '22:00, in the system time zone' },
+      { name: 'until', type: 'time', label: 'Until', required: true, help: '06:30; before From, it runs over midnight' },
+      { name: 'days', type: 'days', label: 'Days', help: 'weekdays, weekends, or [mon, wed, fri]; every day unless set' },
       EVERY,
     ],
   },
@@ -380,12 +380,12 @@ const kinds: KindSpec[] = [
     group: 'action',
     label: 'Link out',
     color: 'grape',
-    about: 'Sends what comes to every **Link in** of the same **Name**, in any automation of the same owner.',
+    about: 'Sends what comes to every **Link in** of the same **Link name**, in any automation of the same owner.',
     icon: 'link',
     description: "Sends to every link in of the same name, in any of its owner's automations",
     input: true,
     outputs: [],
-    settings: [{ name: 'name', type: 'text', label: 'Name', required: true }],
+    settings: [{ name: 'name', type: 'text', label: 'Link name', required: true, help: "The same as a link in's, in any of its owner's automations" }],
   },
   {
     type: 'debug',

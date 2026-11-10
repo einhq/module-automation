@@ -7,7 +7,8 @@ import type { AutomationNodeSpec, AutomationNodeStatus } from '../../lib/api.ts'
 import { outputsOf } from './graph-edit.ts';
 
 export const NODE_WIDTH = 200;
-const NODE_MIN_HEIGHT = 64;
+/** The band with the title (`CARD_BAND`), then room for what it does and what it last sent, and a margin. */
+const NODE_MIN_HEIGHT = 88;
 const PORT_GAP = 20;
 /** Room round the nodes on the canvas, so the outermost can be dragged further out. */
 export const CANVAS_PAD = 240;

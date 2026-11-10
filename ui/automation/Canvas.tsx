@@ -262,15 +262,15 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
                   background: `linear-gradient(var(--mantine-color-${color}-light) 0 ${CARD_BAND}px, transparent ${CARD_BAND}px), var(--mrx-surface-raised)`,
                   boxShadow: `inset 0 3px 0 var(--mantine-color-${color}-filled), var(--mantine-shadow-xs)`,
                   cursor: editable ? 'move' : 'pointer',
-                  padding: '8px 14px',
+                  padding: '0 14px',
                 }}
               >
                 <Stack gap={2} style={{ minWidth: 0 }}>
-                  <Box style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                  <Box style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, height: CARD_BAND, paddingTop: 3 }}>
                     <TablerIcon name={kind?.icon ?? 'help'} size={16} color={`var(--mantine-color-${color}-light-color)`} />
                     <Text size='sm' fw={600} truncate>{typeof node.label === 'string' && node.label ? node.label : id}</Text>
                   </Box>
-                  <Text size='xs' c='dimmed' truncate>{wrong.length ? wrong[0].message : summaryOf(node) || kind?.label}</Text>
+                  <Text size='xs' c='dimmed' truncate mt={8}>{wrong.length ? wrong[0].message : summaryOf(node) || kind?.label}</Text>
                   {said && <Text size='xs' c={status?.[id]?.problem ? 'red' : 'teal'} truncate>{status?.[id]?.problem ?? said}</Text>}
                 </Stack>
                 {kind?.input !== false && (

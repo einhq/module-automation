@@ -17,6 +17,7 @@ import {
   Select,
   Stack,
   Switch,
+  Table,
   Text,
   TextInput,
   ThemeIcon,
@@ -354,7 +355,7 @@ function NameField({ id, disabled, onRename }: { id: string; disabled: boolean; 
     <TextInput
       label='Name'
       withAsterisk
-      description='What wires and math name it by, and its key in the YAML'
+      title='What wires and math name it by, and its key in the YAML'
       value={text}
       error={problem}
       disabled={disabled}
@@ -412,15 +413,12 @@ function KindDocs({ kind }: { kind: KindSpec }) {
       notify({ message: error instanceof Error ? error.message : String(error), color: 'red' });
     }
   };
-  const outputs = kind.outputs.length === 0
-    ? 'Nothing: it is where a line ends.'
-    : kind.boolean
-    ? `True or false, on out and on the output of that name; only when it changes${
-      kind.settings.some((each) => each.name === 'every') ? ', unless Send every result is on' : ''
-    }.`
+  const changes = kind.settings.some((each) => each.name === 'every') ? 'when it changes, unless Send every result is on' : 'when it changes';
+  const outputs: [string, string][] = kind.boolean
+    ? [['out', `true or false, ${changes}`], ['true', `true, ${changes}`], ['false', `false, ${changes}`]]
     : kind.type === 'switch'
-    ? 'The value, on the output of the first case it passes, or on else.'
-    : 'On out.';
+    ? [['a case', 'the value, when that case is the first it passes'], ['else', 'the value, when it passes none']]
+    : kind.outputs.map((output) => [output, 'what it sends, as above']);
   return (
     <Box style={{ borderTop: '1px solid var(--mantine-color-default-border)' }} pt='xs'>
       <UnstyledButton onClick={() => void toggle()} aria-expanded={open} style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
@@ -430,21 +428,44 @@ function KindDocs({ kind }: { kind: KindSpec }) {
       <Collapse expanded={open} transitionDuration={150}>
         <Stack gap='xs' pt='xs'>
           <Text size='sm'>{inline(kind.about)}</Text>
-          <Text size='sm'>
-            <Text span fw={600}>Outputs</Text> {outputs}
-          </Text>
           {kind.input === false && <Text size='sm' c='dimmed'>Nothing is wired into it: it starts things.</Text>}
+          <Text size='sm' fw={600}>Outputs</Text>
+          {outputs.length
+            ? (
+              <Table fz='sm' verticalSpacing={4} horizontalSpacing='xs' withTableBorder>
+                <Table.Tbody>
+                  {outputs.map(([output, sends]) => (
+                    <Table.Tr key={output}>
+                      <Table.Td w={70}>
+                        <Code>{output}</Code>
+                      </Table.Td>
+                      <Table.Td>{sends}</Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            )
+            : <Text size='sm'>None: it is where a line ends.</Text>}
           {kind.settings.length > 0 && (
-            <Stack gap={4}>
+            <>
               <Text size='sm' fw={600}>Settings</Text>
-              {kind.settings.map((setting) => (
-                <Text key={setting.name} size='sm'>
-                  <Text span fw={500}>{setting.label}</Text>
-                  {setting.required && <Text span c='var(--mantine-color-error)' ml={2}>*</Text>} <Text span ff='monospace' size='xs' c='dimmed'>{setting.name}</Text>
-                  {setting.help ? ` — ${setting.help}` : ''}
-                </Text>
-              ))}
-            </Stack>
+              <Table fz='sm' verticalSpacing={4} horizontalSpacing='xs' withTableBorder>
+                <Table.Tbody>
+                  {kind.settings.map((setting) => (
+                    <Table.Tr key={setting.name}>
+                      <Table.Td w={110} style={{ verticalAlign: 'top' }}>
+                        <Text size='sm' fw={500}>
+                          {setting.label}
+                          {setting.required && <Text span c='var(--mantine-color-error)' ml={2}>*</Text>}
+                        </Text>
+                        <Code>{setting.name}</Code>
+                      </Table.Td>
+                      <Table.Td style={{ verticalAlign: 'top' }}>{setting.help ?? ''}</Table.Td>
+                    </Table.Tr>
+                  ))}
+                </Table.Tbody>
+              </Table>
+            </>
           )}
         </Stack>
       </Collapse>
@@ -458,20 +479,27 @@ export function NodeForm({ automation, running, id, node, editable, problems, on
   const color = kind?.color ?? 'gray';
   return (
     <Stack gap='sm'>
-      <Group gap='sm' wrap='nowrap'>
+      <Group gap='sm' wrap='nowrap' align='flex-start'>
         <ThemeIcon color={color} variant='light' size={36} radius='md'>
           <TablerIcon name={kind?.icon ?? 'help'} size={20} />
         </ThemeIcon>
-        <Stack gap={0} style={{ minWidth: 0 }}>
+        <Stack gap={0} style={{ minWidth: 0, flex: 1 }}>
           <Text fw={600} truncate>{kind?.label ?? node.type}</Text>
           <Text size='xs' c='dimmed'>{kind?.description}</Text>
         </Stack>
+        {editable && (
+          <Tooltip label='Remove the node'>
+            <ActionIcon variant='subtle' color='red' size={32} onClick={onRemove} aria-label='Remove the node'>
+              <TablerIcon name='trash' size={18} />
+            </ActionIcon>
+          </Tooltip>
+        )}
       </Group>
       {problems.map((problem, index) => <Alert key={index} color='red' variant='light' p='xs'>{problem.message}</Alert>)}
       <NameField id={id} disabled={!editable} onRename={onRename} />
       <TextInput
         label='Label'
-        description='Shown on its card in place of its name'
+        title='Shown on its card in place of its name'
         value={shown(node.label)}
         disabled={!editable}
         onChange={(event) => onChange({ label: event.currentTarget.value || undefined })}
@@ -487,11 +515,6 @@ export function NodeForm({ automation, running, id, node, editable, problems, on
         />
       ))}
       {node.type === 'button' && <PressButton automation={automation} id={id} running={running} />}
-      {editable && (
-        <Button variant='light' color='red' leftSection={<TablerIcon name='trash' size={16} />} onClick={onRemove}>
-          Remove the node
-        </Button>
-      )}
       {kind && <KindDocs kind={kind} />}
     </Stack>
   );
