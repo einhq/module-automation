@@ -2,7 +2,7 @@ import { CodeMirror, EmptyState, PageLoader, TablerIcon } from '@ein/ui/componen
 import { useLogFollow, usePhone } from '@ein/ui/hooks';
 import { shq } from '@ein/ui/lib';
 import { execCommand, notify } from '@ein/ui/signals';
-import { ActionIcon, Badge, Box, Button, Drawer, Group, Menu, Paper, Popover, ScrollArea, Stack, Switch, Text, Tooltip, UnstyledButton } from '@mantine/core';
+import { ActionIcon, Badge, Box, Drawer, Group, Loader, Menu, Paper, Popover, ScrollArea, Stack, Switch, Text, Tooltip, UnstyledButton } from '@mantine/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { AutomationDetail, AutomationNodeStatus, AutomationProblem, AutomationRunStatus, AutomationSetAnswer, AutomationSpec } from '../../lib/api.ts';
@@ -16,6 +16,10 @@ export type AutomationTab = 'graph' | 'yaml' | 'runs';
 
 /** How often a running automation's nodes are asked what they did, while its graph is open. */
 const STATUS_MS = 3000;
+/** How long after the last change the graph is saved: a card dragged saves once, where it is let go. */
+const GRAPH_SAVE_MS = 800;
+/** How long after the last keystroke the YAML is saved: long enough to finish a word. */
+const YAML_SAVE_MS = 1500;
 
 const GROUPS = [
   { group: 'input', label: 'Inputs' },
@@ -155,11 +159,54 @@ function Runs({ path }: { path: string }) {
 }
 
 /**
+ * Whether every change is saved: saving, saved, or why the last change could not be, with a retry
+ * and reading the file again, which drops what was not saved.
+ */
+function SaveState({ saving, error, phone, onRetry, onReload }: { saving: boolean; error: string | null; phone: boolean; onRetry: () => void; onReload: () => void }) {
+  if (error) {
+    return (
+      <>
+        <Tooltip label={error} multiline w={300}>
+          <Badge
+            component='button'
+            type='button'
+            color='yellow'
+            variant='filled'
+            size='lg'
+            onClick={onRetry}
+            leftSection={<TablerIcon name='cloud-x' size={14} />}
+            style={{ cursor: 'pointer', flex: '0 0 auto' }}
+            aria-label={`Not saved: ${error}. Try again`}
+          >
+            {phone ? null : 'Not saved'}
+          </Badge>
+        </Tooltip>
+        <Tooltip label='Read the file again, dropping what is not saved'>
+          <ActionIcon variant='subtle' size={36} onClick={onReload} aria-label='Read the file again'>
+            <TablerIcon name='reload' size={20} />
+          </ActionIcon>
+        </Tooltip>
+      </>
+    );
+  }
+  const label = saving ? 'Saving…' : 'Saved';
+  return (
+    <Tooltip label={saving ? 'Saving the latest change' : 'Every change is saved as it is made'}>
+      <Box style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'white', opacity: .8, flex: '0 0 auto' }} aria-live='polite' aria-label={label}>
+        {saving ? <Loader size={14} color='white' /> : <TablerIcon name='cloud-check' size={18} />}
+        {!phone && <Text size='sm' c='white'>{label}</Text>}
+      </Box>
+    </Tooltip>
+  );
+}
+
+/**
  * One automation, filling what is below the page's bar: its graph to draw and wire, its YAML, or
- * what it did, as `tab` says. Its problems, its switch and Save stand in the bar, in `controls`; the
- * leftmost `inset` px are under the page's list. The graph and the YAML are the same file; each tab
- * saves its own changes, the graph as YAML in the editor's order, the YAML as typed, and while one
- * has changes not saved the other shows the file as it was.
+ * what it did, as `tab` says. Its problems, its switch and whether it is saved stand in the bar, in
+ * `controls`; the leftmost `inset` px are under the page's list. The graph and the YAML are the same
+ * file, and every change saves itself a moment after the last one: the graph as YAML in the editor's
+ * order, as a draft while it has problems, the YAML as typed once it is YAML at all. A change not yet
+ * saved is saved at once when the tab changes or the automation is left.
  */
 export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
   name: string;
@@ -176,6 +223,11 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
   const [dirty, setDirty] = useState<'graph' | 'yaml' | null>(null);
   const [selection, setSelection] = useState<Selection | null>(null);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  /** Counts the changes, so a save knows whether another came while it was on its way. */
+  const edits = useRef(0);
+  /** A save is on its way; one asked for meanwhile waits for it. */
+  const inFlight = useRef<Promise<void> | null>(null);
   const [status, setStatus] = useState<Record<string, AutomationNodeStatus> | undefined>();
   const place = useRef<(() => [number, number]) | null>(null);
 
@@ -186,6 +238,7 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
       setSpec(next.spec && typeof next.spec === 'object' && next.spec.nodes ? next.spec : { nodes: {} });
       setText(next.text);
       setDirty(null);
+      setSaveError(null);
       setLoadError(null);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : String(error));
@@ -220,6 +273,7 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
   }, [tab, name, detail?.running, detail?.writable]);
 
   const change = (next: AutomationSpec) => {
+    edits.current++;
     setSpec(next);
     setDirty('graph');
   };
@@ -238,28 +292,68 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
     setSelection({ kind: 'node', id: added.id });
   };
 
-  const save = async (draft = false) => {
-    setSaving(true);
-    try {
-      const body = dirty === 'yaml' ? `--yaml ${shq(text)}` : `--json ${shq(JSON.stringify(spec))}`;
-      const answer = await execCommand<AutomationSetAnswer>(`automation-set ${shq(name)} ${body}${draft ? ' --draft' : ''}`);
-      notify({
-        message: answer.problems.length ? `${name} saved; it does not run until its problems are gone` : `${name} saved`,
-        color: answer.problems.length ? 'yellow' : 'green',
-      });
-      await load();
-      onChanged();
-    } catch (error) {
-      failed(error);
-    } finally {
-      setSaving(false);
-    }
+  /** What is not saved yet, written now; a change made meanwhile stays to be saved next. */
+  const save = async (): Promise<void> => {
+    if (inFlight.current) await inFlight.current;
+    if (!dirty) return;
+    const kind = dirty;
+    const at = edits.current;
+    const body = kind === 'yaml' ? `--yaml ${shq(text)}` : `--json ${shq(JSON.stringify(spec))}`;
+    const run = (async () => {
+      setSaving(true);
+      try {
+        await execCommand<AutomationSetAnswer>(`automation-set ${shq(name)} ${body} --draft`);
+        const next = await execCommand<AutomationDetail>(`automation-show ${shq(name)}`);
+        setDetail(next);
+        setSaveError(null);
+        if (edits.current === at) {
+          setDirty(null);
+          // The other side catches up; the side being edited keeps what is on screen.
+          if (kind === 'yaml') setSpec(next.spec && typeof next.spec === 'object' && next.spec.nodes ? next.spec : { nodes: {} });
+          else setText(next.text);
+        }
+        onChanged();
+      } catch (error) {
+        setSaveError((error instanceof Error ? error.message : String(error)).replace(/^automation-set: /, ''));
+      } finally {
+        setSaving(false);
+      }
+    })();
+    inFlight.current = run;
+    await run;
+    inFlight.current = null;
   };
+  const saveRef = useRef(save);
+  saveRef.current = save;
+
+  // A moment after the last change, it is saved.
+  useEffect(() => {
+    if (!dirty || !editable) return;
+    const timer = setTimeout(() => void saveRef.current(), dirty === 'yaml' ? YAML_SAVE_MS : GRAPH_SAVE_MS);
+    return () => clearTimeout(timer);
+  }, [spec, text, dirty, editable]);
+
+  // On to another tab, or away from the automation: what waits is saved at once.
+  const pending = useRef(false);
+  pending.current = Boolean(dirty && editable);
+  useEffect(() => {
+    if (pending.current) void saveRef.current();
+  }, [tab]);
+  useEffect(() => () => {
+    if (pending.current) void saveRef.current();
+  }, []);
+  useEffect(() => {
+    const warn = (event: BeforeUnloadEvent) => {
+      if (pending.current) event.preventDefault();
+    };
+    globalThis.addEventListener('beforeunload', warn);
+    return () => globalThis.removeEventListener('beforeunload', warn);
+  }, []);
 
   const toggle = async (on: boolean) => {
     try {
       await execCommand(`automation-${on ? 'enable' : 'disable'} ${shq(name)}`);
-      await load();
+      setDetail(await execCommand<AutomationDetail>(`automation-show ${shq(name)}`));
       onChanged();
     } catch (error) {
       failed(error);
@@ -311,18 +405,7 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
         onChange={(event) => void toggle(event.currentTarget.checked)}
         styles={{ label: { color: 'white' } }}
       />
-      {dirty && (
-        <Tooltip label='Read the file again'>
-          <ActionIcon variant='subtle' size={36} onClick={() => void load()} aria-label='Read the file again'>
-            <TablerIcon name='reload' size={20} />
-          </ActionIcon>
-        </Tooltip>
-      )}
-      {editable && (
-        <Button size='xs' loading={saving} disabled={!dirty} onClick={() => void save(dirty === 'graph' && problems.length > 0)} style={{ flex: '0 0 auto' }}>
-          {dirty === 'graph' && problems.length > 0 ? 'Save as draft' : 'Save'}
-        </Button>
-      )}
+      {editable && <SaveState saving={saving || Boolean(dirty && !saveError)} error={saveError} phone={phone} onRetry={() => void save()} onReload={() => void load()} />}
     </>
   );
 
@@ -347,7 +430,7 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
         dirty === 'yaml'
           ? (
             <Box h='100%' pl={inset}>
-              <EmptyState title='The YAML has changes not saved'>Save them, or read the file again, to see the graph.</EmptyState>
+              <EmptyState title='The YAML is not saved yet'>{saveError ?? 'The graph is shown once it is.'}</EmptyState>
             </Box>
           )
           : (
@@ -386,12 +469,13 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
       )}
       {tab === 'yaml' && (
         <Box h='100%' p='sm' pl={inset ? inset + 12 : undefined}>
-          {dirty === 'graph' ? <EmptyState title='The graph has changes not saved'>Save them to see them here as YAML, or read the file again.</EmptyState> : (
+          {dirty === 'graph' ? <EmptyState title='The graph is not saved yet'>{saveError ?? 'Its YAML is shown once it is.'}</EmptyState> : (
             <CodeMirror
               value={text}
               language='yaml'
               readOnly={!editable}
               onChange={(next) => {
+                edits.current++;
                 setText(next);
                 setDirty(next === detail.text ? null : 'yaml');
               }}

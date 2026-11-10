@@ -96,6 +96,8 @@ Deno.test({ name: 'automation engine', sanitizeResources: false, sanitizeOps: fa
       assertEquals(refused.success, false);
       const draft = await anna.execJson<AutomationSetAnswer>(`automation-set porch --draft --yaml ${quoted('nodes: {a: {type: delay}}')}`);
       assertEquals([draft.written, draft.problems], [true, [{ node: 'a', message: 'for is needed: for' }]]);
+      const broken = await anna.exec(`automation-set porch --draft --yaml ${quoted('nodes: {a: [')}`);
+      assertEquals([broken.success, (await anna.execString('cat /etc/automations/porch.yaml')).includes('delay')], [false, true]);
       const listed = await until(
         'held back',
         () => anna.execJson<AutomationSummary[]>('automations'),
