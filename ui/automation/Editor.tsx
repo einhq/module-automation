@@ -34,7 +34,7 @@ const GROUPS = [
 const failed = (error: unknown) => notify({ message: error instanceof Error ? error.message : String(error), color: 'red' });
 
 /** How wide the panel of the node tapped is, over the canvas's right edge. */
-const FORM_WIDTH = 320;
+const FORM_WIDTH = 400;
 
 /** The kinds of node to add, by group, in a menu from a button on the canvas. */
 function Palette({ onAdd, phone }: { onAdd: (type: string) => void; phone: boolean }) {

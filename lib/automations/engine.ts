@@ -59,6 +59,9 @@ export type LogEntry = {
 };
 
 /** A pending deadline, kept over a restart: when it is due and what it will send. */
+/** A node that sent, on which outputs; or one that held a value back, and why. */
+export type Trace = { node: string; value: Value; outputs?: string[]; skipped?: string };
+
 export type Deadline = { node: string; due: number; value?: Value; topic?: string };
 
 export type LocalTime = {
@@ -80,6 +83,8 @@ type EngineOptions = {
   /** A link out's message, for every link in of that name of the same owner's. */
   link?(name: string, message: Message): void;
   log?(entry: LogEntry): void;
+  /** Each send, and each value held back, while not quiet: for following a run step by step. */
+  trace?(trace: Trace): void;
 };
 
 /** The most nodes a message passes: past it, a message goes round, through links, and is dropped. */
@@ -315,7 +320,10 @@ export class AutomationEngine {
     for (const node of this.automation.nodes.values()) {
       if (node.type !== 'device' || node.config.endpoint !== key) continue;
       const only = node.config.is as Value | undefined;
-      if (only !== undefined && !same(event.value, only)) continue;
+      if (only !== undefined && !same(event.value, only)) {
+        if (!this.quiet) this.options.trace?.({ node: node.id, value: event.value, skipped: `only ${JSON.stringify(only)} is passed on` });
+        continue;
+      }
       this.send(node, { value: event.value, topic: key, at: event.at, ...(event.event ? { event: true } : {}), hops: 0 }, event.value);
     }
   }
@@ -339,6 +347,7 @@ export class AutomationEngine {
       return;
     }
     const outputs = output !== undefined ? [output] : node.kind.boolean ? ['out', truthy(value) ? 'true' : 'false'] : ['out'];
+    if (!this.quiet) this.options.trace?.({ node: node.id, value, outputs });
     for (const each of outputs) {
       for (const target of node.wires[each] ?? []) this.deliver(target, node.id, next);
     }
@@ -347,7 +356,10 @@ export class AutomationEngine {
   /** Send a true or false only when it changed, unless the node's `every` is set. */
   private sendChange(node: Node, message: Message, value: boolean): void {
     const state = this.state(node.id);
-    if (state.last === value && !node.config.every) return;
+    if (state.last === value && !node.config.every) {
+      if (!this.quiet) this.options.trace?.({ node: node.id, value, skipped: 'the same as it last sent' });
+      return;
+    }
     state.last = value;
     this.send(node, message, value);
   }

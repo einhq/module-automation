@@ -62,3 +62,18 @@ Deno.test('simulation: a shell line is said, not run, and a clock goes off as th
   assertEquals(said(sim, 'shell'), ['would run: echo hi (VALUE=06:30)']);
   assertEquals(sim.nextClock('morning'), START + 30 * MIN + 1440 * MIN);
 });
+
+Deno.test('simulation: the log follows each node that sent, and says why one held a value back', async () => {
+  const sim = simulationOf(example('motion-light'));
+  sim.prime(new Map([['hall-sensor/illuminance', { value: 80, at: START - MIN }]]), new Map());
+  assertEquals(sim.entries, [], 'priming is quiet');
+  sim.feed('hall-sensor/motion', true);
+  await sim.settled();
+  assertEquals(sim.entries.map((entry) => `${entry.node}: ${entry.text}`).reverse(), [
+    'hall-sensor/motion: reads true',
+    'motion: sent true',
+    'linger: sent true on true',
+    'dark-and-moving: held back false: the same as it last sent',
+  ]);
+  assertEquals(said(sim, 'control'), [], 'too light for the lamp');
+});

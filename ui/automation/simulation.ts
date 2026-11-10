@@ -25,7 +25,11 @@ const MAX_ECHOES = 50;
 export type SimEntry = {
   at: number;
   node: string;
-  kind: 'control' | 'shell' | 'link' | 'debug' | 'error' | 'clock' | 'input';
+  /**
+   * What happened: an input fed in, a node's send or a value it held back, an action it would have
+   * taken, what a debug node said, an error, a clock going off.
+   */
+  kind: 'input' | 'send' | 'skip' | 'control' | 'shell' | 'link' | 'debug' | 'error' | 'clock';
   text: string;
 };
 
@@ -65,6 +69,13 @@ export class Simulation {
         this.engine.link(name, { ...message, hops: message.hops + 1 });
       },
       log: (entry) => this.logged(entry),
+      trace: (trace) => {
+        if (trace.skipped) this.add(trace.node, 'skip', `held back ${shown(trace.value)}: ${trace.skipped}`);
+        else {
+          const outputs = (trace.outputs ?? []).filter((output) => output !== 'out' || trace.outputs?.length === 1);
+          this.add(trace.node, 'send', `sent ${shown(trace.value)}${outputs.length && outputs[0] !== 'out' ? ` on ${outputs.join(' and ')}` : ''}`);
+        }
+      },
     });
   }
 
@@ -85,7 +96,7 @@ export class Simulation {
     const [device, name] = endpoint.split('/');
     this.echoes = 0;
     if (!press) this.values.set(endpoint, value);
-    this.add(endpoint, 'input', `${press ? 'pressed' : 'reads'} ${shown(value)}`);
+    this.add(endpoint, 'input', press ? `pressed: ${shown(value)}` : `reads ${shown(value)}`);
     this.engine.handle({ device, endpoint: name, value, event: press || undefined, at: this.now });
     this.changed();
   }
@@ -101,7 +112,7 @@ export class Simulation {
   /** A button node pressed. */
   press(node: string): void {
     this.echoes = 0;
-    this.add(node, 'input', 'pressed');
+    this.add(node, 'input', 'pressed by hand');
     this.engine.press(node);
     this.changed();
   }
@@ -109,7 +120,7 @@ export class Simulation {
   /** A message to the links in named `name`, as a link out of another automation sends it. */
   sendLink(name: string, value: Value): void {
     this.echoes = 0;
-    this.add(name, 'input', `link sent ${shown(value)}`);
+    this.add(name, 'input', `a link out sent ${shown(value)}`);
     this.engine.link(name, { value, topic: name, at: this.now, hops: 0 });
     this.changed();
   }

@@ -28,7 +28,28 @@ const clockText = (ms: number, seconds = true) =>
 
 const waitText = (ms: number) => ms < MINUTE ? `${Math.ceil(ms / 1000)} s` : ms < 3_600_000 ? `${Math.round(ms / MINUTE)} min` : `${Math.round(ms / 3_600_000)} h`;
 
+/** What the automation would have done, beside the steps that led to it. */
+const ACTIONS = new Set<SimEntry['kind']>(['control', 'shell', 'link', 'debug', 'error']);
+
+/** The simulated time of an entry, to the second. */
+const timeText = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+/** An entry about no node of the graph: an endpoint fed, a link's name. */
+const ENTRY_ICONS: Record<SimEntry['kind'], string> = {
+  input: 'arrow-big-right-lines',
+  send: 'arrow-right',
+  skip: 'player-pause',
+  control: 'toggle-right',
+  shell: 'terminal-2',
+  link: 'link',
+  debug: 'bug',
+  error: 'alert-triangle',
+  clock: 'clock',
+};
+
 const ENTRY_COLOURS: Record<SimEntry['kind'], string> = {
+  send: 'gray',
+  skip: 'gray',
   control: 'teal',
   shell: 'orange',
   link: 'grape',
@@ -97,9 +118,25 @@ function InputRow({ sim, node }: { sim: Simulation; node: Node }) {
       feed = (
         <Stack gap={4}>
           <Group gap={4}>
-            {['on', 'off'].map((word) => <Button key={word} size='compact-xs' variant='default' onClick={() => sim.feed(endpoint!, word === 'on')}>{word}</Button>)}
+            <Text size='xs' c='dimmed'>Send a reading</Text>
+            {['on', 'off'].map((word) => (
+              <Button
+                key={word}
+                size='compact-xs'
+                variant='default'
+                title={`The device reads ${word}, as when a sensor sees motion${word === 'off' ? ' no more' : ''} or a switch is turned ${word}`}
+                onClick={() => sim.feed(endpoint!, word === 'on')}
+              >
+                {word}
+              </Button>
+            ))}
             {node.config.is !== undefined && (
-              <Button size='compact-xs' variant='default' onClick={() => sim.feed(endpoint!, node.config.is as Value, true)}>
+              <Button
+                size='compact-xs'
+                variant='default'
+                title={`A press of ${shownValue(node.config.is as Value)}, the one this node passes on`}
+                onClick={() => sim.feed(endpoint!, node.config.is as Value, true)}
+              >
                 press {shownValue(node.config.is as Value)}
               </Button>
             )}
@@ -164,6 +201,7 @@ function InputRow({ sim, node }: { sim: Simulation; node: Node }) {
  */
 export function Simulator({ sim, onClose }: { sim: Simulation; onClose: () => void }) {
   const [running, setRunning] = useState(true);
+  const [only, setOnly] = useState<'all' | 'actions'>('all');
   // The clock keeps pace with the real one while it runs.
   useEffect(() => {
     if (!running) return;
@@ -179,6 +217,7 @@ export function Simulator({ sim, onClose }: { sim: Simulation; onClose: () => vo
   const inputs = [...sim.automation.nodes.values()].filter((node) => ['device', 'online', 'clock', 'button', 'link-in', 'between'].includes(node.type));
   const controls = [...new Set([...sim.automation.nodes.values()].filter((node) => node.type === 'control').map((node) => node.config.endpoint as string))];
   const next = sim.nextTimer();
+  const shownEntries = only === 'all' ? sim.entries : sim.entries.filter((entry) => ACTIONS.has(entry.kind));
 
   return (
     <Stack gap='sm'>
@@ -242,22 +281,39 @@ export function Simulator({ sim, onClose }: { sim: Simulation; onClose: () => vo
         </>
       )}
 
-      <Text size='sm' fw={600}>What it would do</Text>
-      {sim.entries.length === 0 ? <Text size='sm' c='dimmed'>Nothing yet: feed it an input.</Text> : (
-        <ScrollArea.Autosize mah={360} type='auto' offsetScrollbars='y'>
-          <Stack gap={4}>
-            {sim.entries.map((entry, index) => (
-              <Group key={index} gap={6} wrap='nowrap' align='flex-start'>
-                <Text size='xs' c='dimmed' ff='monospace' style={{ flex: '0 0 auto' }}>{new Date(entry.at).toLocaleTimeString()}</Text>
-                <Badge size='xs' variant='light' color={ENTRY_COLOURS[entry.kind]} style={{ flex: '0 0 auto' }}>{entry.kind}</Badge>
-                <Text size='xs' style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-                  <Text span fw={600} size='xs'>{entry.node}</Text> {entry.text}
-                </Text>
-              </Group>
-            ))}
-          </Stack>
-        </ScrollArea.Autosize>
-      )}
+      <Group justify='space-between' wrap='nowrap'>
+        <Text size='sm' fw={600}>What happened</Text>
+        <SegmentedControl
+          size='xs'
+          value={only}
+          onChange={(next) => setOnly(next as 'all' | 'actions')}
+          data={[{ value: 'all', label: 'Every step' }, { value: 'actions', label: 'What it would do' }]}
+        />
+      </Group>
+      {shownEntries.length === 0
+        ? <Text size='sm' c='dimmed'>{sim.entries.length ? 'Nothing it would do yet.' : 'Nothing yet: feed it an input.'}</Text>
+        : (
+          <ScrollArea.Autosize mah={420} type='auto' offsetScrollbars='y'>
+            <Stack gap={6}>
+              {shownEntries.map((entry, index) => {
+                const node = sim.automation.nodes.get(entry.node);
+                const kind = node ? KINDS[node.type] : undefined;
+                return (
+                  <Group key={index} gap={8} wrap='nowrap' align='flex-start'>
+                    <Text size='xs' c='dimmed' ff='monospace' w={62} style={{ flex: '0 0 62px' }}>{timeText(entry.at)}</Text>
+                    <ThemeIcon color={kind?.color ?? ENTRY_COLOURS[entry.kind]} variant='light' size={20} radius='sm' style={{ flex: '0 0 auto' }}>
+                      <TablerIcon name={kind?.icon ?? ENTRY_ICONS[entry.kind]} size={12} />
+                    </ThemeIcon>
+                    <Text size='xs' c={entry.kind === 'skip' ? 'dimmed' : entry.kind === 'error' ? 'red' : undefined} style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+                      <Text span fw={600} size='xs'>{entry.node}</Text> {entry.text}
+                      {ACTIONS.has(entry.kind) && entry.kind !== 'debug' && <Badge size='xs' variant='light' color={ENTRY_COLOURS[entry.kind]} ml={6}>{entry.kind}</Badge>}
+                    </Text>
+                  </Group>
+                );
+              })}
+            </Stack>
+          </ScrollArea.Autosize>
+        )}
     </Stack>
   );
 }
