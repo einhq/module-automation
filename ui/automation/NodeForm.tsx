@@ -1,4 +1,4 @@
-import { Markdown, TablerIcon } from '@ein/ui/components';
+import { TablerIcon } from '@ein/ui/components';
 import { agoText, readingText, shq } from '@ein/ui/lib';
 import { execCommand, loadUserConfig, notify, userConfigFlag } from '@ein/ui/signals';
 import { useSignals } from '@preact/signals-react/runtime';
@@ -7,6 +7,7 @@ import {
   Alert,
   Box,
   Button,
+  Code,
   Collapse,
   Group,
   Loader,
@@ -357,7 +358,7 @@ function NameField({ id, disabled, onRename }: { id: string; disabled: boolean; 
       value={text}
       error={problem}
       disabled={disabled}
-      ff='monospace'
+      styles={{ input: { fontFamily: 'var(--mantine-font-family-monospace)' } }}
       onChange={(event) => setText(event.currentTarget.value)}
       onBlur={commit}
       onKeyDown={(event) => {
@@ -393,6 +394,12 @@ function PressButton({ automation, id, running }: { automation: string; id: stri
   );
 }
 
+/** A kind's docs, which mark only **a setting's name** and `code`, as text with those parts set. */
+const inline = (text: string): ReactNode[] =>
+  text.split(/(\*\*[^*]+\*\*|`[^`]+`)/).map((part, index) =>
+    part.startsWith('**') ? <Text key={index} span fw={600}>{part.slice(2, -2)}</Text> : part.startsWith('`') ? <Code key={index}>{part.slice(1, -1)}</Code> : part
+  );
+
 /** What a kind does and what each of its settings means, under a heading that folds, as the reader last left it. */
 function KindDocs({ kind }: { kind: KindSpec }) {
   useSignals();
@@ -422,10 +429,9 @@ function KindDocs({ kind }: { kind: KindSpec }) {
       </UnstyledButton>
       <Collapse expanded={open} transitionDuration={150}>
         <Stack gap='xs' pt='xs'>
-          <Markdown content={kind.about} />
+          <Text size='sm'>{inline(kind.about)}</Text>
           <Text size='sm'>
-            <Text span fw={600}>Sends:</Text>
-            {outputs}
+            <Text span fw={600}>Outputs</Text> {outputs}
           </Text>
           {kind.input === false && <Text size='sm' c='dimmed'>Nothing is wired into it: it starts things.</Text>}
           {kind.settings.length > 0 && (
