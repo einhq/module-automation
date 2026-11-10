@@ -60,7 +60,7 @@ export type LogEntry = {
 
 /** A pending deadline, kept over a restart: when it is due and what it will send. */
 /** A node that sent, on which outputs; or one that held a value back, and why. */
-export type Trace = { node: string; value: Value; outputs?: string[]; skipped?: string };
+type Trace = { node: string; value: Value; outputs?: string[]; skipped?: string };
 
 export type Deadline = { node: string; due: number; value?: Value; topic?: string };
 
