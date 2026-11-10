@@ -233,41 +233,6 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
               );
             })()}
           </svg>
-          {status && wires.map((wire) => {
-            const sent = status[wire.from]?.outputs?.[wire.output];
-            if (!sent) return null;
-            const from = spec.nodes[wire.from];
-            const to = spec.nodes[wire.to];
-            const a = local(from);
-            const b = local(to);
-            const middle = wireMiddle(a.x + NODE_WIDTH, a.y + outputY(from, wire.output), b.x, b.y + inputY(to));
-            const fresh = (now ?? Date.now()) - Date.parse(sent.at) < FRESH_MS;
-            return (
-              <Box
-                key={`label:${wire.from}:${wire.output}:${wire.to}`}
-                title={`${wire.from} sent ${wireValue(sent.value)} to ${wire.to} at ${new Date(sent.at).toLocaleTimeString()}`}
-                style={{
-                  position: 'absolute',
-                  left: middle.x,
-                  top: middle.y,
-                  transform: 'translate(-50%, -50%)',
-                  pointerEvents: 'none',
-                  whiteSpace: 'nowrap',
-                  padding: '1px 7px',
-                  borderRadius: 999,
-                  fontSize: 11,
-                  lineHeight: '16px',
-                  border: `1px solid ${fresh ? 'var(--mantine-primary-color-filled)' : 'var(--mantine-color-default-border)'}`,
-                  background: fresh ? 'var(--mantine-primary-color-light)' : 'var(--mrx-surface-raised)',
-                  boxShadow: 'var(--mantine-shadow-xs)',
-                  transition: 'background 400ms, border-color 400ms',
-                }}
-              >
-                <Text span size='11px' fw={600} ff='monospace'>{wireValue(sent.value)}</Text>
-                <Text span size='11px' c='dimmed'>{` · ${agoText(sent.at, now)}`}</Text>
-              </Box>
-            );
-          })}
           {entries.map(([id, node]) => {
             const kind = KINDS[node.type];
             const color = kind?.color ?? 'gray';
@@ -347,6 +312,43 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
                     />
                   </Tooltip>
                 ))}
+              </Box>
+            );
+          })}
+          {/* Above the cards: a label on a short wire may reach over their edges. */}
+          {status && wires.map((wire) => {
+            const sent = status[wire.from]?.outputs?.[wire.output];
+            if (!sent) return null;
+            const from = spec.nodes[wire.from];
+            const to = spec.nodes[wire.to];
+            const a = local(from);
+            const b = local(to);
+            const middle = wireMiddle(a.x + NODE_WIDTH, a.y + outputY(from, wire.output), b.x, b.y + inputY(to));
+            const fresh = (now ?? Date.now()) - Date.parse(sent.at) < FRESH_MS;
+            return (
+              <Box
+                key={`label:${wire.from}:${wire.output}:${wire.to}`}
+                title={`${wire.from} sent ${wireValue(sent.value)} to ${wire.to} at ${new Date(sent.at).toLocaleTimeString()}`}
+                style={{
+                  position: 'absolute',
+                  left: middle.x,
+                  top: middle.y,
+                  transform: 'translate(-50%, -50%)',
+                  pointerEvents: 'none',
+                  zIndex: 1,
+                  whiteSpace: 'nowrap',
+                  padding: '0 6px',
+                  borderRadius: 999,
+                  fontSize: 11,
+                  lineHeight: '16px',
+                  border: `1px solid ${fresh ? 'var(--mantine-primary-color-filled)' : 'var(--mantine-color-default-border)'}`,
+                  background: fresh ? 'var(--mantine-primary-color-light)' : 'var(--mrx-surface-raised)',
+                  boxShadow: 'var(--mantine-shadow-xs)',
+                  transition: 'background 400ms, border-color 400ms',
+                }}
+              >
+                <Text span size='11px' fw={600} ff='monospace'>{wireValue(sent.value)}</Text>
+                <Text span size='11px' c='dimmed'>{` · ${agoText(sent.at, now)}`}</Text>
               </Box>
             );
           })}

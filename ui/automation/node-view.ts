@@ -93,11 +93,6 @@ export const summaryOf = (node: AutomationNodeSpec): string => {
   }
 };
 
-const ago = (iso: string, now: number): string => {
-  const seconds = Math.round((now - Date.parse(iso)) / 1000);
-  return seconds < 60 ? `${Math.max(0, seconds)} s ago` : seconds < 3600 ? `${Math.round(seconds / 60)} min ago` : `${Math.round(seconds / 3600)} h ago`;
-};
-
 const until = (iso: string, now: number): string => {
   const seconds = Math.max(0, Math.round((Date.parse(iso) - now) / 1000));
   return seconds < 120 ? `in ${seconds} s` : `in ${Math.round(seconds / 60)} min`;
@@ -109,5 +104,14 @@ export const statusText = (status: AutomationNodeStatus | undefined, now = Date.
   return `next ${until(status.due, now)}`;
 };
 
-/** How long ago `at` was, as of `now`: a wire's label. */
-export const agoText = (at: string, now = Date.now()): string => ago(at, now);
+/** How long ago `at` was, as of `now`, as short as a wire's label wants it: `15s`, `3m`, `2h`, `4d`. */
+export const agoText = (at: string, now = Date.now()): string => {
+  const seconds = Math.max(0, Math.round((now - Date.parse(at)) / 1000));
+  return seconds < 60
+    ? `${seconds}s`
+    : seconds < 3600
+    ? `${Math.round(seconds / 60)}m`
+    : seconds < 86_400
+    ? `${Math.round(seconds / 3600)}h`
+    : `${Math.round(seconds / 86_400)}d`;
+};
