@@ -7,15 +7,19 @@
  * The device is named by its node id (ESPHome's own name for it), else by its first identifier;
  * the entity by its object id. An empty config message withdraws the entity.
  *
- * Read: `sensor`, `binary_sensor`, `switch`, `light` (on and off, both schemas), `number`,
- * `select`, `text`, `button`, `event` and `device_automation` triggers. Other components are
- * skipped and listed by `notes()`.
+ * Read: `sensor`, `binary_sensor`, `switch`, `light`, `number`, `select`, `text`, `button`, `event`
+ * and `device_automation` triggers. Other components are skipped and listed by `notes()`.
+ *
+ * A light, of either schema, is on and off; its brightness is `<light>-brightness`, in %, and its
+ * colour `<light>-color`, as `#rrggbb`, when it has them. The JSON schema's colour is read from r, g
+ * and b, hue and saturation, or x and y, and set in the light's own colour mode.
  */
 
 import { deviceName, type DeviceValue } from '@ein/api';
+import { hexOf, hexOfHs, hexOfXy, hsOf, type Rgb, rgbOf, xyOf } from './color.ts';
 import { labelOf } from './label.ts';
 import { compileTemplate, type Template } from './template.ts';
-import type { Command, EntityKind, MqttSource, Publish, Update } from './types.ts';
+import type { Command, EntityKind, EntityUpdate, MqttSource, Publish, Update } from './types.ts';
 
 /** Home Assistant's abbreviations of the keys this source reads. */
 const ABBREVIATIONS: Record<string, string> = {
@@ -23,6 +27,12 @@ const ABBREVIATIONS: Record<string, string> = {
   avty: 'availability',
   avty_mode: 'availability_mode',
   avty_t: 'availability_topic',
+  bri_cmd_t: 'brightness_command_topic',
+  bri_cmd_tpl: 'brightness_command_template',
+  bri_scl: 'brightness_scale',
+  bri_stat_t: 'brightness_state_topic',
+  bri_val_tpl: 'brightness_value_template',
+  clrm: 'color_mode',
   cmd_t: 'command_topic',
   cns: 'connections',
   cu: 'configuration_url',
@@ -42,12 +52,17 @@ const ABBREVIATIONS: Record<string, string> = {
   pl_off: 'payload_off',
   pl_on: 'payload_on',
   pl_prs: 'payload_press',
+  rgb_cmd_t: 'rgb_command_topic',
+  rgb_cmd_tpl: 'rgb_command_template',
+  rgb_stat_t: 'rgb_state_topic',
+  rgb_val_tpl: 'rgb_value_template',
   stat_cla: 'state_class',
   stat_off: 'state_off',
   stat_on: 'state_on',
   stat_t: 'state_topic',
   stat_val_tpl: 'state_value_template',
   stype: 'subtype',
+  sup_clrm: 'supported_color_modes',
   sw: 'sw_version',
   t: 'topic',
   uniq_id: 'unique_id',
@@ -97,6 +112,29 @@ const sensorValue = (raw: unknown): DeviceValue => {
   return Number.isFinite(number) ? number : text;
 };
 
+/** A number from a payload or a JSON field. */
+const numberOf = (raw: unknown): number | undefined => {
+  const number = typeof raw === 'number' ? raw : typeof raw === 'string' && raw.trim() !== '' ? Number(raw) : NaN;
+  return Number.isFinite(number) ? number : undefined;
+};
+
+/** The JSON schema's colour modes a colour is set in, the first the light has. */
+const COLOR_MODES = ['rgb', 'rgbw', 'rgbww', 'hs', 'xy'];
+
+/** A JSON state's `color` as `#rrggbb`: by r, g and b, else hue and saturation, else x and y. */
+const colorOf = (raw: unknown): string | undefined => {
+  if (raw === null || typeof raw !== 'object') return undefined;
+  const color = raw as Config;
+  return hexOf(color.r, color.g, color.b) ?? hexOfHs(color.h ?? color.hue, color.s ?? color.saturation) ?? hexOfXy(color.x, color.y);
+};
+
+/** A colour as a JSON command's `color`, in the light's colour mode. */
+const colorCommand = (mode: string, rgb: Rgb): Config | undefined => {
+  if (mode === 'hs') return hsOf(rgb);
+  if (mode === 'xy') return xyOf(rgb);
+  return { r: rgb[0], g: rgb[1], b: rgb[2] };
+};
+
 /** On, off, or neither, by the entity's own words for them. */
 const onOff = (raw: unknown, on: string, off: string): DeviceValue => {
   if (typeof raw === 'boolean') return raw;
@@ -108,7 +146,8 @@ const onOff = (raw: unknown, on: string, off: string): DeviceValue => {
 
 type StateRoute = { device: string; entity: string; read: (payload: string) => Update[] };
 type AvailabilityRoute = { device: string; on: string; off: string };
-type Known = { device: string; entity: string; topics: string[]; availability: string[] };
+/** What one config announced: its entity, and a light's brightness and colour beside it. */
+type Known = { device: string; entity: string; entities: string[]; topics: string[]; availability: string[] };
 
 type HaDiscoveryOptions = { prefix?: string };
 
@@ -135,7 +174,7 @@ export const createHaDiscovery = (options: HaDiscoveryOptions = {}): MqttSource 
       if (left.length) availability.set(topic, left);
       else availability.delete(topic);
     }
-    commands.delete(`${was.device}/${was.entity}`);
+    for (const entity of was.entities) commands.delete(`${was.device}/${entity}`);
     known.delete(configTopic);
     return was;
   };
@@ -143,7 +182,7 @@ export const createHaDiscovery = (options: HaDiscoveryOptions = {}): MqttSource 
   /** An entity name not yet taken on the device by another config. */
   const entityName = (device: string, objectId: string, component: string, configTopic: string): string => {
     const base = deviceName(objectId) || deviceName(component);
-    const taken = [...known.entries()].some(([topic, each]) => topic !== configTopic && each.device === device && each.entity === base);
+    const taken = [...known.entries()].some(([topic, each]) => topic !== configTopic && each.device === device && each.entities.includes(base));
     return taken ? `${base}-${deviceName(component)}` : base;
   };
 
@@ -186,12 +225,15 @@ export const createHaDiscovery = (options: HaDiscoveryOptions = {}): MqttSource 
     };
 
     let problem: string | undefined;
-    const template = (key: string): Template | undefined => {
+    const compiled = (key: string): Template | { problem: string } | undefined => {
       const source = str(config[key]);
-      if (!source) return undefined;
-      const compiled = compileTemplate(source);
-      if (typeof compiled === 'function') return compiled;
-      problem = compiled.problem;
+      return source ? compileTemplate(source) : undefined;
+    };
+    /** The entity's own template; one it cannot read makes it unsupported. */
+    const template = (key: string): Template | undefined => {
+      const result = compiled(key);
+      if (result === undefined || typeof result === 'function') return result;
+      problem = result.problem;
       return undefined;
     };
 
@@ -199,30 +241,135 @@ export const createHaDiscovery = (options: HaDiscoveryOptions = {}): MqttSource 
     const commandTopic = withBase(str(config.command_topic), base);
     const payloadOn = str(config.payload_on) ?? 'ON';
     const payloadOff = str(config.payload_off) ?? 'OFF';
-    const state = (value: DeviceValue, retained: boolean): Update[] => [{ kind: 'state', device, entity, value, retained }];
+    const state = (value: DeviceValue, name = entity): Update[] => [{ kind: 'state', device, entity: name, value, retained: false }];
     let settable = false;
+    const label = str(config.name) ?? (component === 'device_automation' ? labelOf(str(config.subtype) ?? objectId) : labelOf(objectId));
+    const entities = [entity];
+    /** A light's brightness and colour, announced after the light. */
+    const parts: EntityUpdate[] = [];
+    const part = (
+      suffix: string,
+      fields: Pick<EntityUpdate, 'entityKind' | 'unit' | 'min' | 'max' | 'step'>,
+      set: ((value: string) => Publish[] | undefined) | undefined,
+      problem?: string,
+    ): string => {
+      const name = `${entity}-${suffix}`;
+      entities.push(name);
+      if (set && !problem) commands.set(`${device}/${name}`, ({ value }) => set(value));
+      parts.push({
+        kind: 'entity',
+        device,
+        entity: name,
+        label: `${label} ${suffix === 'color' ? 'colour' : suffix}`,
+        ...fields,
+        settable: !!set && !problem,
+        supported: !problem,
+        problem,
+      });
+      if (problem) skipped.set(`${device}/${name}`, problem);
+      else skipped.delete(`${device}/${name}`);
+      return name;
+    };
+    const percent = { entityKind: 'number', unit: '%', min: 0, max: 100, step: 1 } as const;
+    /** A light's brightness in % from the light's own scale, and back. */
+    const scale = num(config.brightness_scale) ?? 255;
+    const percentOf = (raw: unknown): number | undefined => {
+      const number = numberOf(raw);
+      return number === undefined ? undefined : Math.round(number / scale * 100);
+    };
+    const levelOf = (value: string): number | undefined => {
+      const number = numberOf(value);
+      return number === undefined ? undefined : Math.round(Math.min(100, Math.max(0, number)) / 100 * scale);
+    };
 
     if (component === 'sensor' || component === 'number' || component === 'select' || component === 'text') {
       const read = template('value_template');
-      route(stateTopic, (payload) => state(sensorValue(read ? read(payload) : payload), false));
+      route(stateTopic, (payload) => state(sensorValue(read ? read(payload) : payload)));
     } else if (component === 'binary_sensor') {
       const read = template('value_template');
-      route(stateTopic, (payload) => state(onOff(read ? read(payload) : payload, payloadOn, payloadOff), false));
+      route(stateTopic, (payload) => state(onOff(read ? read(payload) : payload, payloadOn, payloadOff)));
     } else if (component === 'switch' || component === 'light') {
       const json = component === 'light' && config.schema === 'json';
       const read = template('state_value_template') ?? (component === 'switch' ? template('value_template') : undefined);
       const stateOn = str(config.state_on) ?? payloadOn;
       const stateOff = str(config.state_off) ?? payloadOff;
+      const modes = Array.isArray(config.supported_color_modes) ? config.supported_color_modes : [];
+      const colorMode = json ? COLOR_MODES.find((mode) => modes.includes(mode)) : undefined;
+      /** A JSON command of one field, sent only when the value reads as one. */
+      const setJson = <T>(key: string, parse: (value: string) => T | undefined) =>
+        commandTopic
+          ? (value: string): Publish[] | undefined => {
+            const parsed = parse(value);
+            return parsed === undefined ? undefined : [{ topic: commandTopic, payload: JSON.stringify({ [key]: parsed }) }];
+          }
+          : undefined;
+      const brightness = json && (config.brightness === true || modes.some((mode) => mode !== 'onoff'))
+        ? part('brightness', percent, setJson('brightness', levelOf))
+        : undefined;
+      const color = colorMode
+        ? part(
+          'color',
+          { entityKind: 'color' },
+          setJson('color', (value) => {
+            const rgb = rgbOf(value);
+            return rgb && colorCommand(colorMode, rgb);
+          }),
+        )
+        : undefined;
       route(stateTopic, (payload) => {
         if (json) {
+          let parsed: Config | null;
           try {
-            return state(onOff((JSON.parse(payload) as Config).state, 'ON', 'OFF'), false);
+            parsed = JSON.parse(payload);
           } catch {
             return [];
           }
+          const updates = state(onOff(parsed?.state, 'ON', 'OFF'));
+          const level = brightness && percentOf(parsed?.brightness);
+          if (brightness && level !== undefined) updates.push(...state(level, brightness));
+          const hex = color && colorOf(parsed?.color);
+          if (color && hex) updates.push(...state(hex, color));
+          return updates;
         }
-        return state(onOff(read ? read(payload) : payload, stateOn, stateOff), false);
+        return state(onOff(read ? read(payload) : payload, stateOn, stateOff));
       });
+      if (component === 'light' && !json) {
+        /** The default schema's brightness or rgb, with topics and templates of their own: a number, or `r,g,b`. */
+        const lightPart = (
+          key: 'brightness' | 'rgb',
+          fields: Pick<EntityUpdate, 'entityKind' | 'unit' | 'min' | 'max' | 'step'>,
+          read: (raw: unknown) => DeviceValue | undefined,
+          write: (value: string) => string | undefined,
+        ) => {
+          const partState = withBase(str(config[`${key}_state_topic`]), base);
+          const partCommand = withBase(str(config[`${key}_command_topic`]), base);
+          if (!partState && !partCommand) return;
+          const value = compiled(`${key}_value_template`);
+          const command = compiled(`${key}_command_template`);
+          const problem = [value, command].find((each) => each !== undefined && typeof each !== 'function') as { problem: string } | undefined;
+          const name = part(
+            key === 'rgb' ? 'color' : key,
+            fields,
+            partCommand
+              ? (raw) => {
+                const payload = write(raw);
+                if (payload === undefined) return undefined;
+                return [{ topic: partCommand, payload: typeof command === 'function' ? String(command(payload)) : payload }];
+              }
+              : undefined,
+            problem?.problem,
+          );
+          route(partState, (payload) => {
+            const reading = read(typeof value === 'function' ? value(payload) : payload);
+            return reading === undefined || reading === null ? [] : state(reading, name);
+          });
+        };
+        lightPart('brightness', percent, percentOf, (value) => levelOf(value)?.toString());
+        lightPart('rgb', { entityKind: 'color' }, (payload) => {
+          const rgb = rgbOf(String(payload ?? ''));
+          return rgb && hexOf(...rgb);
+        }, (value) => rgbOf(value)?.join(','));
+      }
       if (commandTopic) {
         settable = true;
         commands.set(`${device}/${entity}`, ({ value }) => {
@@ -273,7 +420,6 @@ export const createHaDiscovery = (options: HaDiscoveryOptions = {}): MqttSource 
       updates.push({ kind: 'subscribe', topic });
     }
 
-    const label = str(config.name) ?? (component === 'device_automation' ? labelOf(str(config.subtype) ?? objectId) : labelOf(objectId));
     head.push({
       kind: 'entity',
       device,
@@ -290,10 +436,10 @@ export const createHaDiscovery = (options: HaDiscoveryOptions = {}): MqttSource 
       settable,
       supported: problem === undefined,
       problem,
-    });
+    }, ...parts);
     if (problem) skipped.set(`${device}/${entity}`, problem);
     else skipped.delete(`${device}/${entity}`);
-    known.set(configTopic, { device, entity, topics, availability: availabilityTopics });
+    known.set(configTopic, { device, entity, entities, topics, availability: availabilityTopics });
     return [...head, ...updates];
   };
 
@@ -323,7 +469,7 @@ export const createHaDiscovery = (options: HaDiscoveryOptions = {}): MqttSource 
       if (config) {
         if (payload.trim() === '') {
           const was = forget(topic);
-          return was ? [{ kind: 'retire', device: was.device, entity: was.entity }] : [];
+          return was ? was.entities.map((entity) => ({ kind: 'retire', device: was.device, entity })) : [];
         }
         let parsed: unknown;
         try {

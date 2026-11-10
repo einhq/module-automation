@@ -125,6 +125,134 @@ Deno.test('ha-discovery: templates, a shared state topic, and what it cannot rea
   });
 });
 
+Deno.test('ha-discovery: lights with brightness and colour', async (t) => {
+  const source = createHaDiscovery();
+  const announce = (object: string, config: Record<string, unknown>) =>
+    source.decode(`homeassistant/light/lamps/${object}/config`, JSON.stringify({ ...config, dev: { ids: 'lamps1', name: 'lamps' } }), true);
+  const kinds = (updates: Update[]) => of(updates, 'entity').map((entity) => [entity.entity, entity.entityKind, entity.unit, entity.settable, entity.supported]);
+  const states = (topic: string, payload: string) => of(source.decode(topic, payload, false), 'state').map((state) => [state.entity, state.value]);
+  const sent = (entity: string, value: string) => source.encode({ device: 'lamps', entity, value })?.map((publish) => [publish.topic, publish.payload]);
+
+  await t.step('an ESPHome colour light, in the JSON schema, has its brightness in % and its colour beside it', () => {
+    const announced = announce('desk', {
+      name: 'Desk',
+      schema: 'json',
+      clrm: true,
+      sup_clrm: ['rgb'],
+      brightness: true,
+      stat_t: 'lamps/light/desk/state',
+      cmd_t: 'lamps/light/desk/command',
+    });
+    assertEquals(kinds(announced), [
+      ['desk', 'light', undefined, true, true],
+      ['desk-brightness', 'number', '%', true, true],
+      ['desk-color', 'color', undefined, true, true],
+    ]);
+    assertEquals(of(announced, 'entity').map((entity) => entity.label), ['Desk', 'Desk brightness', 'Desk colour']);
+    assertEquals(states('lamps/light/desk/state', JSON.stringify({ state: 'ON', color_mode: 'rgb', brightness: 128, color: { r: 255, g: 128, b: 0 } })), [
+      ['desk', true],
+      ['desk-brightness', 50],
+      ['desk-color', '#ff8000'],
+    ]);
+  });
+
+  await t.step('each is set with a JSON command of its own field', () => {
+    assertEquals(sent('desk', 'on'), [['lamps/light/desk/command', '{"state":"ON"}']]);
+    assertEquals(sent('desk-brightness', '40'), [['lamps/light/desk/command', '{"brightness":102}']]);
+    assertEquals(sent('desk-color', '#ff8000'), [['lamps/light/desk/command', '{"color":{"r":255,"g":128,"b":0}}']]);
+    assertEquals(sent('desk-color', '255,128,0'), sent('desk-color', '#ff8000'));
+    assertEquals(sent('desk-brightness', 'bright'), undefined);
+    assertEquals(sent('desk-color', 'orange'), undefined);
+  });
+
+  await t.step('a Zigbee2MQTT light in x and y has its own brightness scale, and its colour is set in x and y', () => {
+    const announced = announce('ceiling', {
+      schema: 'json',
+      supported_color_modes: ['xy', 'color_temp'],
+      brightness: true,
+      brightness_scale: 254,
+      state_topic: 'zigbee2mqtt/ceiling',
+      command_topic: 'zigbee2mqtt/ceiling/set',
+    });
+    assertEquals(kinds(announced).map(([entity, kind]) => [entity, kind]), [['ceiling', 'light'], ['ceiling-brightness', 'number'], ['ceiling-color', 'color']]);
+    assertEquals(states('zigbee2mqtt/ceiling', JSON.stringify({ state: 'OFF', brightness: 254, color_mode: 'xy', color: { x: 0.64, y: 0.33 } })), [
+      ['ceiling', false],
+      ['ceiling-brightness', 100],
+      ['ceiling-color', '#ff0000'],
+    ]);
+    assertEquals(sent('ceiling-brightness', '50'), [['zigbee2mqtt/ceiling/set', '{"brightness":127}']]);
+    assertEquals(sent('ceiling-color', '#ff0000'), [['zigbee2mqtt/ceiling/set', '{"color":{"x":0.6401,"y":0.33}}']]);
+    assertEquals(sent('ceiling-color', '#000000'), undefined);
+  });
+
+  await t.step('one in hue and saturation is read and set in them', () => {
+    announce('strip', { schema: 'json', supported_color_modes: ['hs'], state_topic: 'lamps/strip', command_topic: 'lamps/strip/set' });
+    assertEquals(states('lamps/strip', JSON.stringify({ state: 'ON', brightness: 255, color: { h: 30, s: 100 } })), [['strip', true], ['strip-brightness', 100], [
+      'strip-color',
+      '#ff8000',
+    ]]);
+    assertEquals(sent('strip-color', '#ff8000'), [['lamps/strip/set', '{"color":{"h":30,"s":100}}']]);
+  });
+
+  await t.step('one only on and off has neither', () => {
+    assertEquals(kinds(announce('porch', { schema: 'json', sup_clrm: ['onoff'], stat_t: 'lamps/porch', cmd_t: 'lamps/porch/set' })).map(([entity]) => entity), ['porch']);
+    assertEquals(states('lamps/porch', JSON.stringify({ state: 'ON' })), [['porch', true]]);
+  });
+
+  await t.step('the default schema has topics of its own for them: a number on its own scale, and r,g,b', () => {
+    const announced = announce('hall', {
+      stat_t: 'lamps/hall',
+      cmd_t: 'lamps/hall/set',
+      bri_stat_t: 'lamps/hall/brightness',
+      bri_cmd_t: 'lamps/hall/brightness/set',
+      bri_scl: 100,
+      rgb_stat_t: 'lamps/hall/rgb',
+      rgb_cmd_t: 'lamps/hall/rgb/set',
+    });
+    assertEquals(kinds(announced).map(([entity, kind, , settable]) => [entity, kind, settable]), [['hall', 'light', true], ['hall-brightness', 'number', true], [
+      'hall-color',
+      'color',
+      true,
+    ]]);
+    assertEquals(states('lamps/hall', 'ON'), [['hall', true]]);
+    assertEquals(states('lamps/hall/brightness', '40'), [['hall-brightness', 40]]);
+    assertEquals(states('lamps/hall/rgb', '255,128,0'), [['hall-color', '#ff8000']]);
+    assertEquals(sent('hall', 'off'), [['lamps/hall/set', 'OFF']]);
+    assertEquals(sent('hall-brightness', '40'), [['lamps/hall/brightness/set', '40']]);
+    assertEquals(sent('hall-color', '#ff8000'), [['lamps/hall/rgb/set', '255,128,0']]);
+  });
+
+  await t.step('their templates are read; one it cannot read leaves the light as it is, and says why', () => {
+    const announced = announce('wall', {
+      stat_t: 'lamps/wall',
+      cmd_t: 'lamps/wall/set',
+      bri_stat_t: 'lamps/wall/attributes',
+      bri_val_tpl: '{{ value_json.level }}',
+      bri_cmd_t: 'lamps/wall/brightness/set',
+      rgb_cmd_t: 'lamps/wall/rgb/set',
+      rgb_cmd_tpl: "{{ '%02x%02x%02x' | format(red, green, blue) }}",
+    });
+    assertEquals(kinds(announced).map(([entity, , , settable, supported]) => [entity, settable, supported]), [['wall', true, true], ['wall-brightness', true, true], [
+      'wall-color',
+      false,
+      false,
+    ]]);
+    assertEquals(states('lamps/wall/attributes', JSON.stringify({ level: 255 })), [['wall-brightness', 100]]);
+    assertEquals(sent('wall-color', '#ff8000'), undefined);
+    assertEquals(source.notes().some((note) => note.startsWith('lamps/wall-color: template not understood')), true);
+  });
+
+  await t.step('an empty announcement retires the light with its brightness and colour', () => {
+    assertEquals(source.decode('homeassistant/light/lamps/desk/config', '', false).map((update) => update.kind === 'retire' && update.entity), [
+      'desk',
+      'desk-brightness',
+      'desk-color',
+    ]);
+    assertEquals(source.decode('lamps/light/desk/state', JSON.stringify({ state: 'ON', brightness: 10 }), false), []);
+    assertEquals(sent('desk-brightness', '40'), undefined);
+  });
+});
+
 Deno.test('shelly: a plug and a four-button input', async (t) => {
   const source = createShelly({ src: 'ein-automation-test' });
 
