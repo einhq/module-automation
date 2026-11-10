@@ -21,8 +21,10 @@ type SettingType =
   /** A reading or a word: `on`, `21.5`, `single`. */
   | 'value'
   | 'text'
-  /** A time of day, `07:30`. */
+  /** A time of day, `07:30`, or one that follows the sun: `sunset`, `dawn+15m`. */
   | 'time'
+  /** Latitude and longitude: `59.33, 18.07`. */
+  | 'location'
   /** Days of the week: `[mon, tue]`, `weekdays`, `weekends`. */
   | 'days'
   | 'flag'
@@ -74,6 +76,12 @@ export const COMMON_KEYS = ['type', 'label', 'pos', 'to'] as const;
 const BOOL = ['out', 'true', 'false'] as const;
 const OUT = ['out'] as const;
 const EVERY: SettingSpec = { name: 'every', type: 'flag', label: 'Send every result', help: 'Send each result, not only when it changes' };
+const LOCATION: SettingSpec = {
+  name: 'location',
+  type: 'location',
+  label: 'Location',
+  help: 'Where the sun is reckoned, for sunrise, sunset, dawn and dusk: latitude, longitude, such as 59.33, 18.07',
+};
 const TESTS: SettingSpec[] = [
   { name: 'is', type: 'value', label: 'Is', help: 'The same value: on, 21, open' },
   { name: 'not', type: 'value', label: 'Is not', help: 'Anything but this value' },
@@ -122,15 +130,16 @@ const kinds: KindSpec[] = [
     label: 'Clock',
     color: 'indigo',
     about:
-      "Sends the time, as text such as `07:30`, at **At** on the **Days** given, or every **Every** (a minute or more) on the minute. Give At or Every. The time zone is the system's.",
+      "Sends the time, as text such as `07:30`, at **At** on the **Days** given, or every **Every** (a minute or more) on the minute. Give At or Every. At is a time of day in the system's time zone, or `sunrise`, `sunset`, `dawn` or `dusk` at **Location**, with an offset such as `sunset-30m`: dawn and dusk are when the sun is 6° below the horizon. A day the sun does not rise or set there, a clock at it does not go off.",
     icon: 'clock',
     description: 'At a time of day, or every so often',
     input: false,
     outputs: OUT,
     settings: [
-      { name: 'at', type: 'time', label: 'At', help: '07:30, in the system time zone' },
+      { name: 'at', type: 'time', label: 'At', help: '07:30 in the system time zone, or sunrise, sunset, dawn or dusk, such as sunset-30m' },
       { name: 'days', type: 'days', label: 'Days', help: 'weekdays, weekends, or [mon, wed, fri]' },
       { name: 'every', type: 'duration', label: 'Every', help: '15m: a minute or more' },
+      LOCATION,
     ],
   },
   {
@@ -349,16 +358,17 @@ const kinds: KindSpec[] = [
     label: 'Between',
     color: 'blue',
     about:
-      'True between **From** and **Until** on the **Days** given (every day unless set), false outside them. It needs nothing wired in, and Until before From runs over midnight.',
+      "True between **From** and **Until** on the **Days** given (every day unless set), false outside them. It needs nothing wired in, and Until before From runs over midnight. Either may be `sunrise`, `sunset`, `dawn` or `dusk` at **Location**, with an offset such as `sunset-30m`: from dusk until dawn is the dark of the night. A day the sun does not set there, sunset is midnight at the day's end and sunrise the one at its start; a day it does not rise, the other way round.",
     icon: 'clock-hour-4',
-    description: 'True between two times of day',
+    description: 'True between two times of day, or from sunset to sunrise',
     input: false,
     outputs: BOOL,
     boolean: true,
     settings: [
-      { name: 'from', type: 'time', label: 'From', required: true, help: '22:00, in the system time zone' },
-      { name: 'until', type: 'time', label: 'Until', required: true, help: '06:30; before From, it runs over midnight' },
+      { name: 'from', type: 'time', label: 'From', required: true, help: '22:00 in the system time zone, or sunrise, sunset, dawn or dusk, such as sunset-30m' },
+      { name: 'until', type: 'time', label: 'Until', required: true, help: '06:30 or sunrise; before From, it runs over midnight' },
       { name: 'days', type: 'days', label: 'Days', help: 'weekdays, weekends, or [mon, wed, fri]; every day unless set' },
+      LOCATION,
       EVERY,
     ],
   },

@@ -21,6 +21,7 @@ import type { Automation, Node } from './graph.ts';
 import { evaluate, type Expression, NoValueYet } from './math.ts';
 import { type Aggregate, aggregate, nameMatches, passes, same, type Test, truthy, valueOfText, valueText } from './values.ts';
 import { nameOfSender } from './graph.ts';
+import { type Location, minuteOf, type TimeOfDay } from './sun.ts';
 
 export type Message = {
   value: Value;
@@ -70,10 +71,10 @@ export type LogEntry = {
   text?: string;
 };
 
-/** A pending deadline, kept over a restart: when it is due and what it will send. */
 /** A node that sent, on which outputs; or one that held a value back, and why. */
 type Trace = { node: string; value: Value; outputs?: string[]; skipped?: string };
 
+/** A pending deadline, kept over a restart: when it is due and what it will send. */
 export type Deadline = { node: string; due: number; value?: Value; topic?: string };
 
 export type LocalTime = {
@@ -207,9 +208,9 @@ export class AutomationEngine {
         state.slot = slot;
         if (was === undefined || slot === was) continue;
       } else {
-        const at = node.config.at as number;
+        const { minute: at, comes } = this.timeToday(node, 'at', now, local);
         const days = node.config.days as number[] | undefined;
-        if (!earlier || state.day === local.day || local.minute < at) continue;
+        if (!comes || !earlier || state.day === local.day || local.minute < at) continue;
         // Passed since the last tick: earlier today before it, or yesterday.
         if (earlier.day === local.day && earlier.minute >= at) continue;
         state.day = local.day;
@@ -397,9 +398,17 @@ export class AutomationEngine {
   private tickBetween(local: LocalTime): void {
     for (const node of this.automation.nodes.values()) {
       if (node.type !== 'between') continue;
-      const inside = inWindow(local, node.config.from as number, node.config.until as number, node.config.days as number[] | undefined);
-      this.sendChange(node, { value: inside, topic: 'clock', at: this.options.now(), hops: 0 }, inside);
+      const now = this.options.now();
+      const from = this.timeToday(node, 'from', now, local).minute;
+      const until = this.timeToday(node, 'until', now, local).minute;
+      const inside = inWindow(local, from, until, node.config.days as number[] | undefined);
+      this.sendChange(node, { value: inside, topic: 'clock', at: now, hops: 0 }, inside);
     }
+  }
+
+  /** The minute of today a node's time setting falls on, a sun time's at the node's location. */
+  private timeToday(node: Node, key: string, now: number, local: LocalTime): { minute: number; comes: boolean } {
+    return minuteOf(node.config[key] as TimeOfDay, node.config.location as Location | undefined, now, local, this.options.localTime);
   }
 
   /** Send `value` on from `node`: on `out`, and on `true` or `false` for a node that says which. */

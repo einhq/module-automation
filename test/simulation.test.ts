@@ -1,10 +1,11 @@
 /** An automation tried out in the editor: fed by hand on a clock of its own, its actions said, not done. */
 
-import { assertEquals } from '@std/assert';
+import { assert, assertEquals } from '@std/assert';
 import { parse } from '@std/yaml';
 import { EXAMPLES } from '../lib/automations/examples.ts';
 import { KINDS } from '../lib/automations/catalog.ts';
 import { readAutomation } from '../lib/automations/graph.ts';
+import { sunEvent } from '../lib/automations/sun.ts';
 import { Simulation } from '../ui/automation/simulation.ts';
 
 const MIN = 60_000;
@@ -62,6 +63,26 @@ Deno.test('simulation: a shell line is said, not run, and a clock goes off as th
   assertEquals(said(sim, 'clock'), ['it is "06:30"']);
   assertEquals(said(sim, 'shell'), ['would run: echo hi (VALUE=06:30)']);
   assertEquals(sim.nextClock('morning'), START + 30 * MIN + 1440 * MIN);
+});
+
+Deno.test('simulation: a clock at sunrise is run on to the next sunrise, which moves with the days', () => {
+  const clock = simulationOf("nodes: {up: {type: clock, at: sunrise, location: '59.33, 18.07'}}");
+  const today = sunEvent(START + 6 * 60 * MIN, [59.33, 18.07], 'sunrise') as number;
+  assertEquals(clock.nextClock('up'), Math.floor(today / MIN) * MIN);
+  clock.advanceTo(today + MIN);
+  const tomorrow = sunEvent(START + 30 * 60 * MIN, [59.33, 18.07], 'sunrise') as number;
+  assertEquals(clock.nextClock('up'), Math.floor(tomorrow / MIN) * MIN);
+  assert(tomorrow - today > 1440 * MIN, 'later each day in November');
+});
+
+Deno.test('simulation: the lamp from sunset to sunrise goes off at sunrise and on again at sunset', async () => {
+  const sim = simulationOf(example('dusk-to-dawn')); // a Monday, 06:00 UTC: before sunrise at its location
+  sim.prime(new Map(), new Map());
+  await sim.settled();
+  const sunset = sunEvent(START + 6 * 60 * MIN, [59.33, 18.07], 'sunset') as number;
+  sim.advanceTo(sunset + MIN);
+  await sim.settled();
+  assertEquals(said(sim, 'control'), ['would set porch-lamp/switch-0 to off', 'would set porch-lamp/switch-0 to on']);
 });
 
 Deno.test('simulation: the log follows each node that sent, and says why one held a value back', async () => {

@@ -12,6 +12,7 @@
 import type { AutomationNodeStatus, AutomationValue as Value } from '../../lib/api.ts';
 import { type Action, AutomationEngine, type LogEntry } from '../../lib/automations/engine.ts';
 import type { Automation } from '../../lib/automations/graph.ts';
+import { type Location, minuteOf, type TimeOfDay } from '../../lib/automations/sun.ts';
 import { truthy, valueOfText } from '../../lib/automations/values.ts';
 import { localTimeIn } from '../../lib/time.ts';
 
@@ -170,12 +171,18 @@ export class Simulation {
     if (!node || node.type !== 'clock') return undefined;
     const every = node.config.every as number | undefined;
     if (every !== undefined) return (Math.floor(this.now / every) + 1) * every;
-    const at = node.config.at as number;
     const days = node.config.days as number[] | undefined;
-    const local = localTimeIn(this.now, this.timeZone);
-    let next = Math.floor(this.now / MINUTE) * MINUTE + (((at - local.minute) % 1440 + 1440) % 1440 || 1440) * MINUTE;
-    for (let tries = 0; days && tries < 7 && !days.includes(localTimeIn(next, this.timeZone).weekday); tries++) next += DAY;
-    return next;
+    const localTime = (ms: number) => localTimeIn(ms, this.timeZone);
+    const start = Math.floor(this.now / MINUTE) * MINUTE;
+    // Today's time if it is still to come, else each day's after it: a sun time moves, and on some days does not come.
+    for (let shift = 0; shift <= 8; shift++) {
+      const probe = start + shift * DAY;
+      const local = localTime(probe);
+      const { minute, comes } = minuteOf(node.config.at as TimeOfDay, node.config.location as Location | undefined, probe, local, localTime);
+      const next = probe + (minute - local.minute) * MINUTE;
+      if (comes && next > this.now && (!days || days.includes(local.weekday))) return next;
+    }
+    return undefined;
   }
 
   status(): Record<string, AutomationNodeStatus> {

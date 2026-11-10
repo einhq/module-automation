@@ -10,6 +10,7 @@ import type { AutomationValue as Value } from '../lib/api.ts';
 import { type Action, AutomationEngine, type LocalTime, type LogEntry } from '../lib/automations/engine.ts';
 import { canonicalSpec, fingerprint, readAutomation } from '../lib/automations/graph.ts';
 import { placeNodes } from '../lib/automations/layout.ts';
+import { sunEvent } from '../lib/automations/sun.ts';
 import { evaluate, NoValueYet, parseExpression } from '../lib/automations/math.ts';
 import { aggregate, same, truthy } from '../lib/automations/values.ts';
 
@@ -129,6 +130,13 @@ Deno.test('graphs: the examples are read, with their wires and senders', () => {
   const clock = automationOf('nodes: {wake: {type: clock, at: "6:30", days: weekdays}, sat: {type: clock, at: "08:00", days: [sat, Sunday]}}');
   assertEquals([clock.nodes.get('wake')!.config.at, clock.nodes.get('wake')!.config.days], [390, [0, 1, 2, 3, 4]]);
   assertEquals(clock.nodes.get('sat')!.config.days, [5, 6]);
+  const sun = automationOf(`
+nodes:
+  dusk: {type: clock, at: sunset-30m, location: '59.33, 18.07'}
+  dark: {type: between, from: dusk, until: 'Sunrise + 1h', location: [-33.9, 18.4]}`);
+  assertEquals([sun.nodes.get('dusk')!.config.at, sun.nodes.get('dusk')!.config.location], [{ sun: 'sunset', offset: -30 * MIN }, [59.33, 18.07]]);
+  assertEquals([sun.nodes.get('dark')!.config.from, sun.nodes.get('dark')!.config.until], [{ sun: 'dusk', offset: 0 }, { sun: 'sunrise', offset: 60 * MIN }]);
+  assertEquals(sun.nodes.get('dark')!.config.location, [-33.9, 18.4]);
 });
 
 Deno.test('graphs: what is wrong is said, with the node it is in', () => {
@@ -144,6 +152,12 @@ Deno.test('graphs: what is wrong is said, with the node it is in', () => {
     ['nodes: {a: {type: clock, at: "07:00", every: 1h}}', 'at or every, one of them', 'a'],
     ['nodes: {a: {type: clock, every: 10s}}', 'a minute or more', 'a'],
     ['nodes: {a: {type: clock, at: "07:00", days: [someday]}}', 'mon, tue or weekdays', 'a'],
+    ['nodes: {a: {type: clock, at: sunset}}', 'at follows the sun, so it needs a location', 'a'],
+    ['nodes: {a: {type: between, from: "22:00", until: dawn}}', 'until follows the sun, so it needs a location', 'a'],
+    ['nodes: {a: {type: clock, at: sunset-soon, location: "1, 2"}}', 'an offset under a day', 'a'],
+    ['nodes: {a: {type: clock, at: noon, location: "1, 2"}}', 'or sunrise, sunset, dawn or dusk', 'a'],
+    ['nodes: {a: {type: clock, at: sunset, location: "95, 2"}}', 'a latitude and a longitude', 'a'],
+    ['nodes: {a: {type: clock, at: sunset, location: "59.3"}}', 'a latitude and a longitude', 'a'],
     ['nodes: {a: {type: aggregate, fn: median}}', 'one of avg', 'a'],
     ['nodes: {a: {type: device, endpoint: a/b, to: [b]}}', 'names b, which is no node', 'a'],
     ['nodes: {a: {type: not, to: [b]}, b: {type: clock, every: 1h}}', 'nothing is wired into', 'a'],
@@ -380,6 +394,49 @@ nodes:
   assertEquals(seen('we'), []);
   assertEquals(seen('o'), ['06:15', '06:30', '06:45', '07:00', '07:15']);
   assertEquals(seen('n'), [false], 'out of the window at 06:15');
+});
+
+Deno.test('sun: sunrise, sunset, dawn and dusk where they come, and where the sun stays up or down', () => {
+  const minute = (ms: number | string) => typeof ms === 'number' ? new Date(ms).toISOString().slice(11, 16) : ms;
+  const noon = Date.UTC(2026, 10, 10, 11);
+  // Latitude 59.33° N, 18.07° E on 10 November, in UTC: sunrise 06:30, sunset 14:36, an hour behind the clock there.
+  assertEquals((['dawn', 'sunrise', 'sunset', 'dusk'] as const).map((event) => minute(sunEvent(noon, [59.33, 18.07], event))), ['05:43', '06:29', '14:36', '15:22']);
+  assertEquals(minute(sunEvent(noon, [40.71, -74], 'sunset')), '21:44');
+  assertEquals(sunEvent(Date.UTC(2026, 5, 21, 11), [78.2, 15.6], 'sunset'), 'up');
+  assertEquals(sunEvent(noon, [78.2, 15.6], 'sunrise'), 'down');
+  assertEquals(sunEvent(Date.UTC(2026, 5, 21, 11), [64, 22], 'dusk'), 'up', 'the sun sets there at midsummer, but not 6° below the horizon');
+  assertEquals(typeof sunEvent(Date.UTC(2026, 5, 21, 11), [64, 22], 'sunset'), 'number');
+});
+
+Deno.test('engine: a clock at sunset and a window from sunset until sunrise, and where the sun does not set', () => {
+  const yaml = (location: string) => `
+nodes:
+  evening: {type: clock, at: sunset-10m, location: '${location}', to: [e]}
+  dark: {type: between, from: sunset, until: sunrise, location: '${location}', to: [d]}
+  e: {type: debug}
+  d: {type: debug}
+`;
+  const { engine, clock, logs } = engineOf(yaml('59.33, 18.07')); // a Monday, 06:00 UTC: before sunrise there
+  engine.prime({});
+  assertEquals(engine.status().dark.value, true);
+  const seen = (node: string) => logs.filter((log) => log.node === node).map((log) => log.value);
+  const sunset = sunEvent(clock.now + 6 * 60 * MIN, [59.33, 18.07], 'sunset') as number;
+  for (let i = 0; i < 24 * 60; i++) {
+    clock.advance(MIN);
+    engine.tick(clock.now);
+  }
+  const at = (ms: number) => new Date(ms).toISOString().slice(11, 16);
+  assertEquals(seen('e'), [at(sunset - 10 * MIN)]);
+  assertEquals(seen('d'), [false, true], 'out of the window at sunrise, in it at sunset');
+
+  const polar = engineOf(yaml('78.2, 15.6')); // November there is polar night: the sun neither rises nor sets
+  polar.engine.prime({});
+  for (let i = 0; i < 24 * 60; i++) {
+    polar.clock.advance(MIN);
+    polar.engine.tick(polar.clock.now);
+  }
+  assertEquals(polar.engine.status().dark.value, true, 'dark all day');
+  assertEquals(polar.logs.filter((log) => log.node === 'e'), [], 'no sunset to go off at');
 });
 
 Deno.test('engine: priming sets state without acting, and a timer counts from the reading', async () => {

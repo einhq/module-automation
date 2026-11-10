@@ -86,6 +86,17 @@ nodes:
 `,
   },
   {
+    name: 'dusk-to-dawn',
+    label: 'From sunset to sunrise',
+    description: 'A lamp on at sunset and off at sunrise, which move with the year',
+    yaml: `description: The porch lamp on from sunset until sunrise
+nodes:
+  dark: {type: between, from: sunset, until: sunrise, location: '59.33, 18.07', pos: [0, 60], to: {true: [lamp-on], false: [lamp-off]}}
+  lamp-on: {type: control, endpoint: porch-lamp/switch-0, value: on, pos: [260, 0]}
+  lamp-off: {type: control, endpoint: porch-lamp/switch-0, value: off, pos: [260, 120]}
+`,
+  },
+  {
     name: 'tour',
     label: 'Tour of every node',
     description: 'Seven small flows, every kind of node among them, with invented devices: to simulate, read and copy from',
@@ -153,13 +164,13 @@ nodes:
   noted: { type: debug, pos: [1500, 1620] }
 
   # 6. The clock. The blinds up at half past six on weekdays and the lamp off a quarter of an hour
-  #    later; night between 22:00 and 06:30; the date every hour; and the router coming and going.
-  #    clock, delay, between, online.
+  #    later; night from dusk until dawn where the house is; the date every hour; and the router
+  #    coming and going. clock, delay, between, online.
   morning: { type: clock, at: '06:30', days: weekdays, pos: [0, 1840], to: [blinds-up, quarter-later] }
   blinds-up: { type: control, endpoint: example-blinds/position, value: 100, pos: [300, 1780] }
   quarter-later: { type: delay, for: 15m, pos: [300, 1900], to: [lamp-off-morning] }
   lamp-off-morning: { type: control, endpoint: example-hall-lamp/switch-0, value: 'off', pos: [600, 1900] }
-  night: { type: between, from: '22:00', until: '06:30', pos: [0, 2040], to: [is-night] }
+  night: { type: between, from: dusk, until: dawn, location: '59.33, 18.07', pos: [0, 2040], to: [is-night] }
   is-night: { type: debug, pos: [300, 2040] }
   hourly: { type: clock, every: 1h, pos: [0, 2160], to: [the-date] }
   the-date: { type: shell, run: date, timeout: 10s, pos: [300, 2160], to: [dated] }

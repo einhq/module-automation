@@ -16,6 +16,7 @@ import type { AutomationNodeSpec, AutomationProblem, AutomationSpec, AutomationV
 import { COMMON_KEYS, KINDS, type KindSpec, type SettingSpec } from './catalog.ts';
 import { type Expression, namesIn, parseExpression } from './math.ts';
 import type { Test } from './values.ts';
+import { type Location, parseSunTime, type TimeOfDay } from './sun.ts';
 import { parseDuration } from '../time.ts';
 
 /** The most nodes an automation has. */
@@ -26,7 +27,7 @@ const DAY_NAMES = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const FULL_DAY_NAMES = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
 /** A setting as the engine reads it. */
-type Setting = Value | number[] | Expression | { name: string; test: Test }[];
+type Setting = Value | number[] | Expression | { name: string; test: Test }[] | TimeOfDay;
 
 export type Node = {
   id: string;
@@ -61,10 +62,29 @@ const isScalar = (value: unknown): value is Value => value === null || ['string'
 /** A name an expression reads a sender's value by: its id with dashes as underscores. */
 export const nameOfSender = (id: string): string => id.replaceAll('-', '_');
 
-const parseTime = (value: unknown): number => {
+/** `07:30` as minutes since midnight; `sunset-30m` as the event and its offset. */
+const parseTime = (value: unknown): TimeOfDay => {
+  const sun = typeof value === 'string' ? parseSunTime(value) : undefined;
+  if (sun) {
+    const offset = sun.offset === undefined ? 0 : parseDuration(sun.offset);
+    if (offset === undefined || offset >= 86_400_000) throw new Error(`takes an offset under a day such as 30m or 1h, not ${JSON.stringify(sun.offset)}`);
+    return { sun: sun.sun, offset: sun.sign * offset };
+  }
   const match = typeof value === 'string' ? /^(\d{1,2}):(\d{2})$/.exec(value.trim()) : null;
-  if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) throw new Error(`takes a time of day such as "07:30", not ${JSON.stringify(value)}`);
+  if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) {
+    throw new Error(`takes a time of day such as "07:30", or sunrise, sunset, dawn or dusk with an offset such as sunset-30m, not ${JSON.stringify(value)}`);
+  }
   return Number(match[1]) * 60 + Number(match[2]);
+};
+
+/** `59.33, 18.07` or `[59.33, 18.07]`: latitude and longitude in degrees. */
+const parseLocation = (value: unknown): Location => {
+  const parts = Array.isArray(value) ? value : typeof value === 'string' ? value.split(',').map((part) => part.trim() === '' ? NaN : Number(part)) : [];
+  const [lat, lng] = parts;
+  if (parts.length !== 2 || typeof lat !== 'number' || typeof lng !== 'number' || !(Math.abs(lat) <= 90) || !(Math.abs(lng) <= 180)) {
+    throw new Error(`takes a latitude and a longitude such as "59.33, 18.07", not ${JSON.stringify(value)}`);
+  }
+  return [lat, lng];
 };
 
 /** Days of the week as numbers, Monday 0. */
@@ -131,6 +151,8 @@ const readSetting = (spec: SettingSpec, value: unknown): Setting => {
       return value;
     case 'time':
       return parseTime(value);
+    case 'location':
+      return parseLocation(value);
     case 'days':
       return parseDays(value);
     case 'flag':
@@ -161,6 +183,8 @@ const checkKind = (kind: KindSpec, config: Node['config']): string | undefined =
   if (kind.type === 'clock' && (config.at === undefined) === (config.every === undefined)) return 'a clock takes at or every, one of them';
   if (kind.type === 'clock' && config.every !== undefined && (config.every as number) < 60_000) return 'every takes a minute or more';
   if (kind.type === 'clock' && config.every !== undefined && config.days !== undefined) return 'days go with at, not with every';
+  const sun = kind.settings.find((setting) => setting.type === 'time' && typeof config[setting.name] === 'object');
+  if (sun && config.location === undefined) return `${sun.name} follows the sun, so it needs a location: latitude, longitude`;
   if (kind.type === 'compare' && !['is', 'not', 'above', 'below'].some((key) => config[key] !== undefined)) return 'a compare takes is, not, above or below';
   return undefined;
 };

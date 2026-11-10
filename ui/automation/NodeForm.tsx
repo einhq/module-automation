@@ -233,6 +233,44 @@ function CasesEditor(
   );
 }
 
+/** Latitude and longitude as typed, with a button that takes this device's position where the browser gives it. */
+function LocationField(
+  { setting, value, disabled, onChange }: { setting: SettingSpec; value: unknown; disabled: boolean; onChange: (value: unknown) => void },
+) {
+  const [finding, setFinding] = useState(false);
+  const canFind = globalThis.isSecureContext && 'geolocation' in navigator;
+  const find = () => {
+    setFinding(true);
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setFinding(false);
+        onChange(`${position.coords.latitude.toFixed(4)}, ${position.coords.longitude.toFixed(4)}`);
+      },
+      (error) => {
+        setFinding(false);
+        notify({ message: `no position: ${error.message}`, color: 'red' });
+      },
+    );
+  };
+  return (
+    <TextInput
+      label={setting.label}
+      withAsterisk={setting.required === true}
+      description={setting.help}
+      value={Array.isArray(value) ? value.join(', ') : shown(value)}
+      disabled={disabled}
+      onChange={(event) => onChange(event.currentTarget.value || undefined)}
+      rightSection={canFind && !disabled && (
+        <Tooltip label="This device's position">
+          <ActionIcon variant='subtle' color='gray' loading={finding} onClick={find} aria-label="Take this device's position">
+            <TablerIcon name='current-location' size={16} />
+          </ActionIcon>
+        </Tooltip>
+      )}
+    />
+  );
+}
+
 function SettingField(
   { setting, value, controls, disabled, onChange }: { setting: SettingSpec; value: unknown; controls: boolean; disabled: boolean; onChange: (value: unknown) => void },
 ) {
@@ -292,6 +330,8 @@ function SettingField(
           onChange={(next) => onChange(next.length ? next : undefined)}
         />
       );
+    case 'location':
+      return <LocationField setting={setting} value={value} disabled={disabled} onChange={onChange} />;
     case 'cases':
       return <CasesEditor value={value} required={required} disabled={disabled} onChange={onChange} />;
     case 'value':
