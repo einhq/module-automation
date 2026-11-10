@@ -16,8 +16,8 @@ export type AutomationTab = 'graph' | 'yaml' | 'runs';
 
 /** How often a running automation's nodes are asked what they did, while its graph is open. */
 const STATUS_MS = 3000;
-/** How long after the last change the graph is saved: a card dragged saves once, where it is let go. */
-const GRAPH_SAVE_MS = 800;
+/** How long the graph rests after a change before it is saved: a card dragged saves once it has settled. */
+const GRAPH_SAVE_MS = 1000;
 /** How long after the last keystroke the YAML is saved: long enough to finish a word. */
 const YAML_SAVE_MS = 1500;
 

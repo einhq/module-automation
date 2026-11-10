@@ -2,7 +2,7 @@ import { TablerIcon } from '@ein/ui/components';
 import { agoText, readingText, shq } from '@ein/ui/lib';
 import { execCommand } from '@ein/ui/signals';
 import { ActionIcon, Alert, Box, Button, Group, Loader, MultiSelect, NumberInput, ScrollArea, Select, Stack, Switch, Text, TextInput, UnstyledButton } from '@mantine/core';
-import { useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import type { DeviceInfo, DeviceSummary, EndpointSummary } from '@ein/api';
 import type { AutomationNodeSpec, AutomationProblem } from '../../lib/api.ts';
 import { KINDS, type SettingSpec } from '../../lib/automations/catalog.ts';
@@ -36,12 +36,24 @@ const devices = () =>
     throw error;
   });
 
+/** A field's title where no input draws one, with the red star a required input's label has. */
+function FieldTitle({ required, children }: { required: boolean; children: ReactNode }) {
+  return (
+    <Text size='sm' fw={500}>
+      {children}
+      {required && <Text span c='var(--mantine-color-error)' ml={4} aria-hidden='true'>*</Text>}
+    </Text>
+  );
+}
+
 /**
  * A device, then one of its endpoints from a list beneath it, each with its latest value: those a
  * control node may write when `controls`. A device picked takes its first endpoint at once, so the
  * node never names a device without one; a node left like that takes it when it is opened.
  */
-function EndpointPicker({ value, controls, disabled, onChange }: { value: string; controls: boolean; disabled: boolean; onChange: (value: string) => void }) {
+function EndpointPicker(
+  { value, controls, required, disabled, onChange }: { value: string; controls: boolean; required: boolean; disabled: boolean; onChange: (value: string) => void },
+) {
   const [device, endpoint] = value.split('/');
   const [list, setList] = useState<DeviceSummary[]>([]);
   const [loaded, setLoaded] = useState<{ device: string; endpoints: EndpointSummary[] } | null>(null);
@@ -78,6 +90,7 @@ function EndpointPicker({ value, controls, disabled, onChange }: { value: string
     <Stack gap={6}>
       <Select
         label='Device'
+        withAsterisk={required}
         searchable
         disabled={disabled || picking !== null}
         data={list.map((each) => ({ value: each.name, label: each.label === each.name ? each.name : `${each.label} (${each.name})` }))}
@@ -86,13 +99,13 @@ function EndpointPicker({ value, controls, disabled, onChange }: { value: string
       />
       {device && (
         <Stack gap={2}>
-          <Text size='sm' fw={500}>{controls ? 'Control' : 'Endpoint'}</Text>
+          <FieldTitle required={required}>{controls ? 'Control' : 'Endpoint'}</FieldTitle>
           {loaded?.device !== device || picking
             ? <Loader size='sm' />
             : !offered.length
             ? <Text size='sm' c='dimmed'>{controls ? 'It has no control to switch.' : 'It has no endpoint to read.'}</Text>
             : (
-              <ScrollArea.Autosize mah={280} type='auto'>
+              <ScrollArea.Autosize mah={280} type='auto' offsetScrollbars='y'>
                 <Stack gap={2} role='radiogroup' aria-label={controls ? 'Control' : 'Endpoint'}>
                   {offered.map((each) => {
                     const chosen = each.name === endpoint;
@@ -105,7 +118,7 @@ function EndpointPicker({ value, controls, disabled, onChange }: { value: string
                         className='mrx-hover-row'
                         onClick={() => onChange(`${device}/${each.name}`)}
                         style={{
-                          padding: '6px 8px',
+                          padding: '8px 12px',
                           borderRadius: 'var(--mantine-radius-sm)',
                           border: `1px solid ${chosen ? 'var(--mantine-primary-color-filled)' : 'var(--mantine-color-default-border)'}`,
                           background: chosen ? 'var(--mantine-primary-color-light)' : undefined,
@@ -134,12 +147,14 @@ function EndpointPicker({ value, controls, disabled, onChange }: { value: string
 }
 
 /** A switch's cases: each a name, one test and its value. */
-function CasesEditor({ value, disabled, onChange }: { value: unknown; disabled: boolean; onChange: (cases: Record<string, Record<string, unknown>>) => void }) {
+function CasesEditor(
+  { value, required, disabled, onChange }: { value: unknown; required: boolean; disabled: boolean; onChange: (cases: Record<string, Record<string, unknown>>) => void },
+) {
   const cases = value && typeof value === 'object' ? Object.entries(value as Record<string, Record<string, unknown>>) : [];
   const put = (rows: [string, Record<string, unknown>][]) => onChange(Object.fromEntries(rows));
   return (
     <Stack gap='xs'>
-      <Text size='sm' fw={500}>Cases</Text>
+      <FieldTitle required={required}>Cases</FieldTitle>
       {cases.map(([name, test], index) => {
         const [key, given] = Object.entries(test ?? {})[0] ?? ['is', ''];
         return (
@@ -188,16 +203,18 @@ function CasesEditor({ value, disabled, onChange }: { value: unknown; disabled: 
 function SettingField(
   { setting, value, controls, disabled, onChange }: { setting: SettingSpec; value: unknown; controls: boolean; disabled: boolean; onChange: (value: unknown) => void },
 ) {
-  const label = `${setting.label}${setting.required ? '' : ' (optional)'}`;
+  const label = setting.label;
+  const required = setting.required === true;
   switch (setting.type) {
     case 'endpoint':
-      return <EndpointPicker value={shown(value)} controls={controls} disabled={disabled} onChange={onChange} />;
+      return <EndpointPicker value={shown(value)} controls={controls} required={required} disabled={disabled} onChange={onChange} />;
     case 'device':
-      return <DevicePicker value={shown(value)} label={label} disabled={disabled} onChange={onChange} />;
+      return <DevicePicker value={shown(value)} label={label} required={required} disabled={disabled} onChange={onChange} />;
     case 'number':
       return (
         <NumberInput
           label={label}
+          withAsterisk={required}
           description={setting.help}
           value={typeof value === 'number' ? value : ''}
           disabled={disabled}
@@ -215,11 +232,22 @@ function SettingField(
         />
       );
     case 'choice':
-      return <Select label={label} data={[...setting.choices ?? []]} value={shown(value) || null} disabled={disabled} onChange={(next) => onChange(next ?? undefined)} />;
+      return (
+        <Select
+          label={label}
+          withAsterisk={required}
+          description={setting.help}
+          data={[...setting.choices ?? []]}
+          value={shown(value) || null}
+          disabled={disabled}
+          onChange={(next) => onChange(next ?? undefined)}
+        />
+      );
     case 'days':
       return (
         <MultiSelect
           label={label}
+          withAsterisk={required}
           description={setting.help}
           data={DAYS}
           value={Array.isArray(value)
@@ -232,13 +260,23 @@ function SettingField(
         />
       );
     case 'cases':
-      return <CasesEditor value={value} disabled={disabled} onChange={onChange} />;
+      return <CasesEditor value={value} required={required} disabled={disabled} onChange={onChange} />;
     case 'value':
-      return <TextInput label={label} description={setting.help} value={shown(value)} disabled={disabled} onChange={(event) => onChange(typed(event.currentTarget.value))} />;
+      return (
+        <TextInput
+          label={label}
+          withAsterisk={required}
+          description={setting.help}
+          value={shown(value)}
+          disabled={disabled}
+          onChange={(event) => onChange(typed(event.currentTarget.value))}
+        />
+      );
     default:
       return (
         <TextInput
           label={label}
+          withAsterisk={required}
           description={setting.help}
           value={shown(value)}
           disabled={disabled}
@@ -249,7 +287,9 @@ function SettingField(
   }
 }
 
-function DevicePicker({ value, label, disabled, onChange }: { value: string; label: string; disabled: boolean; onChange: (value: string | undefined) => void }) {
+function DevicePicker(
+  { value, label, required, disabled, onChange }: { value: string; label: string; required: boolean; disabled: boolean; onChange: (value: string | undefined) => void },
+) {
   const [list, setList] = useState<DeviceSummary[]>([]);
   useEffect(() => {
     devices().then(setList).catch(() => setList([]));
@@ -257,6 +297,7 @@ function DevicePicker({ value, label, disabled, onChange }: { value: string; lab
   return (
     <Select
       label={label}
+      withAsterisk={required}
       searchable
       disabled={disabled}
       data={list.map((each) => ({ value: each.name, label: each.label === each.name ? each.name : `${each.label} (${each.name})` }))}
@@ -279,7 +320,7 @@ export function NodeForm({ id, node, editable, problems, onChange, onRemove }: N
         </Stack>
       </Group>
       {problems.map((problem, index) => <Alert key={index} color='red' variant='light' p='xs'>{problem.message}</Alert>)}
-      <TextInput label='Label (optional)' value={shown(node.label)} disabled={!editable} onChange={(event) => onChange({ label: event.currentTarget.value || undefined })} />
+      <TextInput label='Label' value={shown(node.label)} disabled={!editable} onChange={(event) => onChange({ label: event.currentTarget.value || undefined })} />
       {kind?.settings.map((setting) => (
         <SettingField
           key={setting.name}

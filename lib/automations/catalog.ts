@@ -86,7 +86,12 @@ const kinds: KindSpec[] = [
     outputs: OUT,
     settings: [
       { name: 'endpoint', type: 'endpoint', label: 'Endpoint', required: true, help: 'hall-sensor/temperature, porch-button/input-0' },
-      { name: 'is', type: 'value', label: 'Only', help: 'Only this value or kind of press: on, single, long' },
+      {
+        name: 'is',
+        type: 'value',
+        label: 'Only when it is',
+        help: 'Pass a reading or press on only when it is this, such as on, or single or long for a button. Left empty, every one is passed on.',
+      },
     ],
   },
   {
