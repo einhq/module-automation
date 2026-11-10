@@ -28,6 +28,8 @@ type CanvasProps = {
   tools?: ReactNode;
 };
 
+/** The room left round the nodes when they are fitted, clear of the panels' edges and handles. */
+const FIT_MARGIN = 40;
 /** How far a press moves before it is a drag rather than a click. */
 const DRAG_THRESHOLD = 4;
 /** Where a node lands when it is dropped: on a grid, so nodes line up. */
@@ -74,11 +76,11 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
   });
   const { size, view, setView } = panZoom;
 
-  /** The nodes as large as fits, no larger than full size: the room round them is for dragging, not fitting. */
+  /** The nodes as large as fits, no larger than full size: the drawing's room round them is for dragging, not fitting. */
   const fitNodes = () => {
-    const room = { width: Math.max(size.width - insets.left - insets.right, NODE_WIDTH), height: size.height };
+    const room = { width: Math.max(size.width - insets.left - insets.right - FIT_MARGIN * 2, NODE_WIDTH), height: Math.max(size.height - FIT_MARGIN * 2, 64) };
     const fitted = fitView({ width: content.width - CANVAS_PAD * 2, height: content.height - CANVAS_PAD * 2 }, room, 0.25);
-    return { ...fitted, x: fitted.x + insets.left - CANVAS_PAD * fitted.scale, y: fitted.y - CANVAS_PAD * fitted.scale };
+    return { ...fitted, x: fitted.x + insets.left + FIT_MARGIN - CANVAS_PAD * fitted.scale, y: fitted.y + FIT_MARGIN - CANVAS_PAD * fitted.scale };
   };
 
   // Placed once the box is measured: the whole graph.
