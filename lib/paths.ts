@@ -20,5 +20,10 @@ export const MODULE_STATE_DIR = '/var/lib/automations.d';
 export const AUTOMATIONS_QUEUE = '/var/queues/automations';
 /** Every device's readings, presses and coming and going, as core's devices publish them. */
 export const AUTOMATIONS_KEYS = ['dev.#'];
+/**
+ * EiN's events the engine reads, apart from the devices' so that a flood of them (an import) does
+ * not hold up a press; bound only to what running automations listen for.
+ */
+export const AUTOMATION_EVENTS_QUEUE = '/var/queues/automation-events';
 /** The hosts on the network no one wants as devices, one id (`automation-found`) a line. */
 export const NETWORK_IGNORED = '/etc/automation/network-ignored';

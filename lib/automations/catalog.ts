@@ -33,6 +33,8 @@ type SettingType =
   | 'expression'
   /** A shell command line. */
   | 'line'
+  /** An event's type, dotted words; an input's may have `*` for one word and `#` for any number. */
+  | 'event'
   /** A switch's cases: `{cold: {below: 18}, warm: {above: 23}}`, each an output of its own. */
   | 'cases';
 
@@ -182,6 +184,23 @@ const kinds: KindSpec[] = [
       { name: 'folder', type: 'folder', label: 'Folder', required: true, help: '/home/anna/inbox: the files directly in it' },
       { name: 'match', type: 'text', label: 'Names', help: '*.pdf, scan-*: every file unless set' },
       { name: 'changes', type: 'flag', label: 'Changed files too', help: 'Send a file again each time it is written' },
+    ],
+  },
+  {
+    type: 'event-in',
+    group: 'input',
+    label: 'Event in',
+    color: 'red',
+    about:
+      "Sends the path of the node an event of EiN is about, as each comes: a fact such as `media.metadata.extracted` (a photo's metadata was read), or a pipeline's run starting or ending (`pipeline.instance.completed`, `pipeline.instance.failed`). In **Event**, `*` stands for one word and `#` for any number of them: `pipeline.instance.*`, `media.#`. **Under** keeps those about a node in that folder, and **With** those whose data says so, such as `pipeline=place-upkeep`. Only events about a node the automation's owner may read come.",
+    icon: 'bolt',
+    description: 'An event of EiN about a node: a fact found, a pipeline run done',
+    input: false,
+    outputs: OUT,
+    settings: [
+      { name: 'event', type: 'event', label: 'Event', required: true, help: 'pipeline.instance.completed; * for one word, # for any: media.#' },
+      { name: 'under', type: 'folder', label: 'Under', help: 'Only events about a node in this folder: /home/anna/Photos' },
+      { name: 'with', type: 'text', label: 'With', help: 'Only events whose data says this: pipeline=place-upkeep, several separated by spaces' },
     ],
   },
   {
@@ -402,6 +421,22 @@ const kinds: KindSpec[] = [
     settings: [
       { name: 'run', type: 'line', label: 'Run', required: true, help: 'The value is $VALUE, where it came from $TOPIC' },
       { name: 'timeout', type: 'duration', label: 'Timeout', help: '30s unless set' },
+    ],
+  },
+  {
+    type: 'event-out',
+    group: 'action',
+    label: 'Event out',
+    color: 'red',
+    about:
+      "Raises an event of EiN about a node, as the automation's owner, for the pipelines that wait for it: **Event** names it, such as `automation.porch.arrived`, and **About** is the path of the node it is about, the value that came unless set (`${value}` and `${topic}` are filled in). A pipeline started by it finds the value that came in `$EVENT_VALUE`, where it came from in `$EVENT_TOPIC` and the automation's name in `$EVENT_AUTOMATION`. Only the administrator raises events, so another's automation with one is not run. It sends the path on once raised.",
+    icon: 'bolt',
+    description: "Raises an event of EiN for pipelines, as the automation's owner",
+    input: true,
+    outputs: OUT,
+    settings: [
+      { name: 'event', type: 'event', label: 'Event', required: true, help: 'automation.porch.arrived: words separated by dots' },
+      { name: 'subject', type: 'value', label: 'About', help: 'The path of the node it is about; the value that came, unless set' },
     ],
   },
   {

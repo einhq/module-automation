@@ -2,9 +2,9 @@
  * One automation running: messages flow from its inputs along its wires, each node doing what its
  * kind says, and its actions are handed to `act` one after another.
  *
- * A message is a value, where it came from (`topic`: an endpoint, a folder, `clock`, `button`) and when. Every
- * node has one input; `and`, `or`, `math` and `aggregate` keep the latest value of each node wired
- * into them. A node that says true or false (compare, and, or, not, timer, held, between, online)
+ * A message is a value, where it came from (`topic`: an endpoint, a folder, `clock`, `button`, an
+ * event's type) and when. Every node has one input; `and`, `or`, `math` and `aggregate` keep the
+ * latest value of each node wired into them. A node that says true or false (compare, and, or, not, timer, held, between, online)
  * sends only when that changes, unless its `every` is set.
  *
  * Quiet: what the engine is primed with (each endpoint's latest reading, read when it starts) and a
@@ -25,7 +25,7 @@ import { type Location, minuteOf, type TimeOfDay } from './sun.ts';
 
 export type Message = {
   value: Value;
-  /** Where it came from: `<device>/<endpoint>`, a file's folder, `clock`, `button`, a link's name. */
+  /** Where it came from: `<device>/<endpoint>`, a file's folder, `clock`, `button`, a link's name, an event's type. */
   topic: string;
   /** When, in ms: a reading's own time, not when it was heard. */
   at: number;
@@ -59,9 +59,19 @@ export type FileEvent = {
   at: number;
 };
 
+/** An event of EiN, as the service hands it on: its type, the path of the node it is about, its data. */
+export type FactEvent = {
+  type: string;
+  subject: string;
+  data?: Record<string, unknown>;
+  /** Ms. */
+  at: number;
+};
+
 export type Action =
   | { kind: 'control'; endpoint: string; value: string }
-  | { kind: 'shell'; line: string; env: Record<string, string>; timeoutMs: number };
+  | { kind: 'shell'; line: string; env: Record<string, string>; timeoutMs: number }
+  | { kind: 'event'; type: string; subject: string; data: Record<string, string> };
 
 export type LogEntry = {
   node: string;
@@ -99,6 +109,10 @@ type EngineOptions = {
   /** Each send, and each value held back, while not quiet: for following a run step by step. */
   trace?(trace: Trace): void;
 };
+
+/** An action as the run log says it. */
+const actionText = (action: Action): string =>
+  action.kind === 'control' ? `${action.value} > ${action.endpoint}` : action.kind === 'event' ? `${action.type} about ${action.subject}` : action.line;
 
 /** The most nodes a message passes: past it, a message goes round, through links, and is dropped. */
 const MAX_HOPS = 64;
@@ -138,14 +152,40 @@ const inWindow = (local: LocalTime, from: number, to: number, days?: number[]): 
 
 /**
  * What an automation reads: the endpoints its device nodes listen to and its controls write, the
- * devices whose coming and going it follows, the folders its file nodes watch.
+ * devices whose coming and going it follows, the folders its file nodes watch, the events it hears
+ * (patterns) and those it raises.
  */
-type Reads = { endpoints: string[]; controls: string[]; devices: string[]; folders: string[] };
+type Reads = { endpoints: string[]; controls: string[]; devices: string[]; folders: string[]; events: string[]; raises: string[] };
 
 export const readsOf = (automation: Automation): Reads => {
   const of = (type: string, key: string) => [...new Set([...automation.nodes.values()].filter((node) => node.type === type).map((node) => node.config[key] as string))];
-  return { endpoints: of('device', 'endpoint'), controls: of('control', 'endpoint'), devices: of('online', 'device'), folders: of('file', 'folder') };
+  return {
+    endpoints: of('device', 'endpoint'),
+    controls: of('control', 'endpoint'),
+    devices: of('online', 'device'),
+    folders: of('file', 'folder'),
+    events: of('event-in', 'event'),
+    raises: of('event-out', 'event'),
+  };
 };
+
+/** Whether an event's type is one `pattern` names: its words, where `*` is any one word and `#` any number of them. */
+export const eventMatches = (pattern: string, type: string): boolean => {
+  const want = pattern.split('.');
+  const have = type.split('.');
+  const match = (i: number, j: number): boolean => {
+    if (i === want.length) return j === have.length;
+    if (want[i] === '#') return match(i + 1, j) || (j < have.length && match(i, j + 1));
+    return j < have.length && (want[i] === '*' || want[i] === have[j]) && match(i + 1, j + 1);
+  };
+  return match(0, 0);
+};
+
+/** A value of an event's data as text, as `with` names it. */
+const dataText = (value: unknown): string | undefined => value === undefined || value === null ? undefined : typeof value === 'object' ? JSON.stringify(value) : String(value);
+
+/** Text with `${value}` and `${topic}` filled in from a message. */
+const filled = (template: string, value: Value, topic: string): string => template.replaceAll('${value}', valueText(value) ?? '').replaceAll('${topic}', topic);
 
 export class AutomationEngine {
   private readonly states = new Map<string, NodeState>();
@@ -189,6 +229,30 @@ export class AutomationEngine {
     if (this.stopped) return;
     if (options.quiet) this.inQuiet(() => this.handleNow(event));
     else this.handleNow(event);
+  }
+
+  /**
+   * An event of EiN, to each event in whose pattern names its type, about a node under its folder,
+   * with the data it asks for. Whether the owner may read the node is the service's to judge first.
+   */
+  handleEvent(event: FactEvent, options: { quiet?: boolean } = {}): void {
+    if (this.stopped) return;
+    const handle = () => {
+      for (const node of this.automation.nodes.values()) {
+        if (node.type !== 'event-in' || !eventMatches(node.config.event as string, event.type)) continue;
+        const under = node.config.under as string | undefined;
+        if (under && under !== '/' && event.subject !== under && !event.subject.startsWith(`${under}/`)) continue;
+        const wanted = Object.entries((node.config.with as Record<string, string> | undefined) ?? {});
+        const missing = wanted.find(([key, text]) => dataText(event.data?.[key]) !== text);
+        if (missing) {
+          if (!this.quiet) this.options.trace?.({ node: node.id, value: event.subject, skipped: `its ${missing[0]} is not ${missing[1]}` });
+          continue;
+        }
+        this.send(node, { value: event.subject, topic: event.type, at: event.at, event: true, hops: 0 }, event.subject);
+      }
+    };
+    if (options.quiet) this.inQuiet(handle);
+    else handle();
   }
 
   /** What the clock says at `now`: called every few seconds. */
@@ -536,9 +600,7 @@ export class AutomationEngine {
       }
       case 'set': {
         const wanted = config.value as Value;
-        const result = typeof wanted === 'string' && wanted.includes('${')
-          ? wanted.replaceAll('${value}', valueText(value) ?? '').replaceAll('${topic}', message.topic)
-          : wanted;
+        const result = typeof wanted === 'string' && wanted.includes('${') ? filled(wanted, value, message.topic) : wanted;
         return this.send(node, message, result);
       }
       case 'delay': {
@@ -598,6 +660,15 @@ export class AutomationEngine {
         });
         return;
       }
+      case 'event-out': {
+        if (this.quiet) return;
+        const about = config.subject === undefined ? value : typeof config.subject === 'string' ? filled(config.subject, value, message.topic) : config.subject as Value;
+        const subject = valueText(about);
+        if (!subject?.startsWith('/')) throw new Error(`it would be about ${JSON.stringify(about)}, which is no path: an event is about a node, such as /home/anna/Photos`);
+        const data = { value: valueText(value) ?? '', topic: message.topic, automation: this.name };
+        this.enqueue(node, { kind: 'event', type: config.event as string, subject, data }, () => this.send(node, { ...message, at: this.options.now() }, subject));
+        return;
+      }
       case 'link-out':
         if (!this.quiet) this.options.link?.(config.name as string, message);
         return;
@@ -635,7 +706,7 @@ export class AutomationEngine {
       try {
         const result = await this.options.act(node.id, action);
         state.problem = undefined;
-        this.options.log?.({ node: node.id, kind: 'action', text: action.kind === 'control' ? `${action.value} > ${action.endpoint}` : action.line });
+        this.options.log?.({ node: node.id, kind: 'action', text: actionText(action) });
         if (!this.stopped) then(result);
       } catch (error) {
         state.problem = error instanceof Error ? error.message : String(error);

@@ -151,4 +151,7 @@ Deno.test('simulation: the tour is shipped as the starting point is, off, with e
     ['"/home/example/inbox/letter.pdf" from /home/example/inbox'],
     'flow 7 passes a PDF on, and nothing else',
   );
+  sim.sendEvent('upkeep-failed', '/home/anna/a.jpg');
+  await sim.settled();
+  assertEquals(said(sim, 'event'), ['would raise example.upkeep.failed about /home/anna/a.jpg'], 'flow 8 hears a failed run, and raises an event of its own');
 });

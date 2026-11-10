@@ -28,7 +28,7 @@ const clockText = (ms: number, seconds = true) => formatDateTime(ms, { weekday: 
 const waitText = (ms: number) => ms < MINUTE ? `${Math.ceil(ms / 1000)} s` : ms < 3_600_000 ? `${Math.round(ms / MINUTE)} min` : `${Math.round(ms / 3_600_000)} h`;
 
 /** What the automation would have done, beside the steps that led to it. */
-const ACTIONS = new Set<SimEntry['kind']>(['control', 'shell', 'link', 'debug', 'error']);
+const ACTIONS = new Set<SimEntry['kind']>(['control', 'shell', 'event', 'link', 'debug', 'error']);
 
 /** The simulated time of an entry, to the second. */
 const timeText = (ms: number) => formatTime(ms, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -40,6 +40,7 @@ const ENTRY_ICONS: Record<SimEntry['kind'], string> = {
   skip: 'player-pause',
   control: 'toggle-right',
   shell: 'terminal-2',
+  event: 'bolt',
   link: 'link',
   debug: 'bug',
   error: 'alert-triangle',
@@ -51,6 +52,7 @@ const ENTRY_COLOURS: Record<SimEntry['kind'], string> = {
   skip: 'gray',
   control: 'teal',
   shell: 'orange',
+  event: 'red',
   link: 'grape',
   debug: 'gray',
   error: 'red',
@@ -80,7 +82,7 @@ export async function startSimulation(automation: Automation): Promise<Simulatio
   return sim;
 }
 
-/** A reading or a press fed to a device node's endpoint, or a message to a link in. */
+/** A reading or a press fed to a device node's endpoint, a message to a link in, the path an event is about. */
 function ValueFeed({ placeholder, onSend, onPress }: { placeholder: string; onSend: (value: Value) => void; onPress?: (value: Value) => void }) {
   const [text, setText] = useState('');
   return (
@@ -172,6 +174,9 @@ function InputRow({ sim, node }: { sim: Simulation; node: Node }) {
     case 'file':
       feed = <ValueFeed placeholder='scan.pdf' onSend={(value) => sim.addFile(node.id, String(value))} />;
       break;
+    case 'event-in':
+      feed = <ValueFeed placeholder='the path it is about: /home/anna/a.jpg' onSend={(value) => sim.sendEvent(node.id, String(value))} />;
+      break;
     case 'between':
       now = sim.status()[node.id]?.value === true ? 'inside' : 'outside';
       break;
@@ -186,7 +191,8 @@ function InputRow({ sim, node }: { sim: Simulation; node: Node }) {
           <Box style={{ minWidth: 0 }}>
             <Text size='sm' fw={600} truncate>{node.id}</Text>
             <Text size='xs' c='dimmed' truncate>
-              {endpoint ?? device ?? (node.config.name as string | undefined) ?? (node.config.folder as string | undefined) ?? kind?.label}
+              {endpoint ?? device ?? (node.config.name as string | undefined) ?? (node.config.folder as string | undefined) ?? (node.config.event as string | undefined) ??
+                kind?.label}
             </Text>
           </Box>
         </Group>
@@ -218,7 +224,7 @@ export function Simulator({ sim, onClose }: { sim: Simulation; onClose: () => vo
     return () => clearInterval(timer);
   }, [sim, running]);
 
-  const inputs = [...sim.automation.nodes.values()].filter((node) => ['device', 'online', 'clock', 'button', 'link-in', 'file', 'between'].includes(node.type));
+  const inputs = [...sim.automation.nodes.values()].filter((node) => ['device', 'online', 'clock', 'button', 'link-in', 'file', 'event-in', 'between'].includes(node.type));
   const controls = [...new Set([...sim.automation.nodes.values()].filter((node) => node.type === 'control').map((node) => node.config.endpoint as string))];
   const next = sim.nextTimer();
   const shownEntries = only === 'all' ? sim.entries : sim.entries.filter((entry) => ACTIONS.has(entry.kind));

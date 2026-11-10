@@ -7,7 +7,7 @@
 import { assert, assertEquals, assertThrows } from '@std/assert';
 import { parse } from '@std/yaml';
 import type { AutomationValue as Value } from '../lib/api.ts';
-import { type Action, AutomationEngine, type LocalTime, type LogEntry } from '../lib/automations/engine.ts';
+import { type Action, AutomationEngine, eventMatches, type LocalTime, type LogEntry, readsOf } from '../lib/automations/engine.ts';
 import { canonicalSpec, fingerprint, readAutomation } from '../lib/automations/graph.ts';
 import { placeNodes } from '../lib/automations/layout.ts';
 import { sunEvent } from '../lib/automations/sun.ts';
@@ -67,6 +67,10 @@ const engineOf = (yaml: string, options: { clock?: FakeClock; shell?: (line: str
     act: (_node: string, action: Action) => {
       if (action.kind === 'control') {
         acts.push(`${action.value} > ${action.endpoint}`);
+        return Promise.resolve();
+      }
+      if (action.kind === 'event') {
+        acts.push(`${action.type} about ${action.subject} ${JSON.stringify(action.data)}`);
         return Promise.resolve();
       }
       acts.push(action.line);
@@ -169,6 +173,11 @@ Deno.test('graphs: what is wrong is said, with the node it is in', () => {
     ['nodes: {a: {type: switch, cases: {else: {is: 1}}}}', 'not else', 'a'],
     ['nodes: {a: {type: link-out, name: x, to: [b]}, b: {type: debug}}', 'sends on nothing', 'a'],
     ['nodes: {"a b": {type: debug}}', 'letters, digits', 'a b'],
+    ['nodes: {a: {type: event-in}}', 'event is needed', 'a'],
+    ['nodes: {a: {type: event-in, event: "media..done"}}', 'event takes an event such as pipeline.instance.completed', 'a'],
+    ['nodes: {a: {type: event-in, event: a.b, under: Photos}}', "under takes a folder's whole path", 'a'],
+    ['nodes: {a: {type: event-in, event: a.b, with: pipeline}}', 'with takes key=value pairs', 'a'],
+    ['nodes: {a: {type: event-out, event: "automation.*"}}', 'event takes an event such as automation.porch.arrived', 'a'],
     ['nodes: {a: {type: debug, pos: [1]}}', 'pos takes [x, y]', 'a'],
     ['when: {event: a/b}\nnodes: {}', 'when: an automation has description, enabled and nodes'],
     ['description: x', 'nodes takes the nodes by id'],
@@ -526,6 +535,55 @@ nodes:
   after.engine.restore(pending);
   clock.advance(0);
   assertEquals(after.logs.map((log) => [log.kind, log.value ?? null]), [['late', null], ['debug', 7]]);
+});
+
+Deno.test('events: a type is matched word by word, * one word and # any number', () => {
+  const cases: [string, string, boolean][] = [
+    ['pipeline.instance.completed', 'pipeline.instance.completed', true],
+    ['pipeline.instance.completed', 'pipeline.instance.failed', false],
+    ['pipeline.instance.*', 'pipeline.instance.failed', true],
+    ['pipeline.*', 'pipeline.instance.failed', false],
+    ['pipeline.#', 'pipeline.instance.failed', true],
+    ['pipeline.#', 'pipeline', true],
+    ['#.failed', 'pipeline.step.failed', true],
+    ['#', 'media.metadata.extracted', true],
+    ['media.*.extracted', 'media.metadata.extracted', true],
+    ['media.*.extracted', 'media.extracted', false],
+  ];
+  for (const [pattern, type, want] of cases) assertEquals(eventMatches(pattern, type), want, `${pattern} ${type}`);
+});
+
+Deno.test('engine: an event in sends the path its event is about, filtered by type, folder and data; an event out raises one', async () => {
+  const { engine, acts, logs } = engineOf(`
+nodes:
+  done: {type: event-in, event: pipeline.instance.*, under: /home/anna/Photos/, with: pipeline=place-upkeep, to: [say, raise, about-it]}
+  say: {type: debug}
+  raise: {type: event-out, event: automation.upkeep.done}
+  about-it: {type: event-out, event: automation.upkeep.seen, subject: '\${value}/..', to: [said]}
+  said: {type: debug}
+  number: {type: button, value: 3, to: [nowhere]}
+  nowhere: {type: event-out, event: automation.nowhere}
+`);
+  assertEquals(readsOf(engine.automation).events, ['pipeline.instance.*']);
+  assertEquals(readsOf(engine.automation).raises.sort(), ['automation.nowhere', 'automation.upkeep.done', 'automation.upkeep.seen']);
+  const data = { pipeline: 'place-upkeep', instance: '/var/pipelines/instances/x' };
+  engine.handleEvent({ type: 'pipeline.instance.completed', subject: '/home/anna/Photos/a.jpg', data, at: 0 });
+  engine.handleEvent({ type: 'pipeline.step.completed', subject: '/home/anna/Photos/b.jpg', data, at: 0 });
+  engine.handleEvent({ type: 'pipeline.instance.completed', subject: '/home/anna/Photosynthesis/c.jpg', data, at: 0 });
+  engine.handleEvent({ type: 'pipeline.instance.failed', subject: '/home/anna/Photos/d.jpg', data: { pipeline: 'other' }, at: 0 });
+  engine.handleEvent({ type: 'pipeline.instance.failed', subject: '/home/anna/Photos/e.jpg', data, at: 0 }, { quiet: true });
+  await engine.idle();
+  assertEquals(acts, [
+    'automation.upkeep.done about /home/anna/Photos/a.jpg {"value":"/home/anna/Photos/a.jpg","topic":"pipeline.instance.completed","automation":"test"}',
+    'automation.upkeep.seen about /home/anna/Photos/a.jpg/.. {"value":"/home/anna/Photos/a.jpg","topic":"pipeline.instance.completed","automation":"test"}',
+  ]);
+  assertEquals(engine.status().say.value, '/home/anna/Photos/e.jpg', 'a quiet event moves state and raises nothing');
+  assertEquals(engine.status().said.value, '/home/anna/Photos/a.jpg/..');
+
+  engine.press('number');
+  await engine.idle();
+  assertEquals(engine.status().nowhere.problem?.includes('which is no path'), true, 'an event is about a node');
+  assertEquals(logs.at(-1)?.kind, 'error');
 });
 
 Deno.test('engine: links between automations, online, and errors that are kept on the node', async () => {

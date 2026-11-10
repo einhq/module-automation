@@ -4,11 +4,13 @@
  * may; it switches a plug by writing its control and runs a line with the value it was sent, never
  * as part of the line; an automation whose owner may not read what it reads, or that others may
  * change, is held back and says why; a file coming into a folder is sent once written, and only
- * one its owner may read; a timer runs on over a restart of the service and a move of its node; a module's automation runs and only the administrator turns it off; and the commands
- * say all that.
+ * one its owner may read; a timer runs on over a restart of the service and a move of its node; a
+ * module's automation runs and only the administrator turns it off; an event reaches an automation
+ * only when its owner may read the node it is about, and only the administrator's raise one; and
+ * the commands say all that.
  */
 
-import { assert, assertEquals } from '@std/assert';
+import { assert, assertEquals, assertStringIncludes } from '@std/assert';
 import { createTestContext, type ShellClient } from '@ein/testing';
 import type { AutomationCheck, AutomationDetail, AutomationRunStatus, AutomationSetAnswer, AutomationStatus, AutomationSummary } from '@automation/api';
 import { shellyButton, shellyPlug } from './fixtures.ts';
@@ -233,6 +235,61 @@ Deno.test({ name: 'automation engine', sanitizeResources: false, sanitizeOps: fa
       assertEquals(list.find((each) => each.name === 'stub/hello')?.enabled, false);
       await admin.execString('automation-enable stub/hello');
       await running('stub/hello');
+    });
+
+    await t.step('an event reaches an automation when its owner may read the node it is about; one an automation raises reaches pipelines, not automations', async () => {
+      const keys = () => admin.execJson<{ attrs: { routingKeys: string[] } }>('stat /var/queues/automation-events').then((node) => node.attrs.routingKeys);
+      assertEquals(await keys(), [], 'no automation listens, so no event is queued');
+      await anna.execString(`automation-set heard --yaml ${
+        quoted(`nodes:
+  seen: {type: event-in, event: example.thing.#, to: [note]}
+  done: {type: event-in, event: pipeline.instance.completed}
+  note: {type: shell, run: 'echo "$TOPIC $VALUE" >> /home/anna/heard.txt'}
+`)
+      }`);
+      await running('heard');
+      await until('the events queue bound', keys, (list) => list.join() === 'system.events,system.pipeline');
+
+      await bo.execString('echo x > /home/bo/secret.txt && chmod 600 /home/bo/secret.txt');
+      const raise = (type: string, subject: string) =>
+        admin.execString(`echo ${quoted(JSON.stringify({ id: crypto.randomUUID(), type, subject, time: Date.now() }))} > /dev/events`);
+      await raise('example.thing.done', '/home/bo/secret.txt');
+      await raise('example.other', '/home/anna');
+      await raise('example.thing.done', '/home/anna');
+      const heard = await until('heard.txt', () => admin.execString('cat /home/anna/heard.txt'), (text) => text.includes('/home/anna'));
+      assertEquals(heard.trim().split('\n'), ['example.thing.done /home/anna'], "bo's file is not anna's to hear of, nor another event");
+
+      await admin.execString(`mkqueue -k system.events /home/admin/raised && automation-set raiser --yaml ${
+        quoted(`nodes:
+  go: {type: button, value: /home/anna, to: [raise]}
+  raise: {type: event-out, event: example.thing.raised}
+`)
+      }`);
+      await running('raiser');
+      await admin.execString('automation-trigger raiser go');
+      const raised = await until(
+        'the raised event',
+        () => admin.execJson<{ items: { data: { type: string; subject: string; source: string; data: Record<string, string> } }[] }>('queue-peek -n 20 /home/admin/raised'),
+        (peek) => peek.items.some((item) => item.data.type === 'example.thing.raised'),
+      );
+      const event = raised.items.find((item) => item.data.type === 'example.thing.raised')!.data;
+      assertEquals([event.subject, event.source, event.data.automation, event.data.value], ['/home/anna', 'automation', 'raiser', '/home/anna']);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      assertEquals((await admin.execString('cat /home/anna/heard.txt')).includes('raised'), false, "an automation's event does not set off another");
+
+      await bo.execString(
+        `automation-set bos-raiser --yaml ${quoted('nodes: {go: {type: button, value: /home/bo, to: [raise]}, raise: {type: event-out, event: example.bo}}')}`,
+      );
+      const list = await until(
+        'held back',
+        () => bo.execJson<AutomationSummary[]>('automations'),
+        (list) => (list.find((each) => each.name === 'bos-raiser')?.problems.length ?? 0) > 0,
+      );
+      assertEquals(list.find((each) => each.name === 'bos-raiser')!.problems[0].message, 'its owner may not raise events: only the administrator writes /dev/events');
+      assertStringIncludes(await bo.execString('automation-check bos-raiser || true'), 'you may not raise events');
+
+      await anna.execString('rm /etc/automations/heard.yaml');
+      await until('the events queue unbound', keys, (list) => list.length === 0);
     });
 
     await t.step('a person turns her own off and on', async () => {

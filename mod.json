@@ -3,7 +3,7 @@
   "version": "0.3.29",
   "description": "MQTT drivers and rules for core's devices: sensors, buttons, plugs and lights that announce themselves over MQTT (Home Assistant discovery, Shelly) become devices under /dev, devices found on the network and web APIs can be added, and automations, nodes wired into a graph, act on them when a reading, a press, a file coming into a folder or the clock says so",
   "license": "MIT",
-  "coreApi": "^0.14.10",
+  "coreApi": "^0.14.11",
   "exports": {
     "./api": "./lib/api.ts"
   },

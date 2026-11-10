@@ -99,14 +99,14 @@ nodes:
   {
     name: 'tour',
     label: 'Tour of every node',
-    description: 'Seven small flows, every kind of node among them, with invented devices: to simulate, read and copy from',
+    description: 'Eight small flows, every kind of node among them, with invented devices: to simulate, read and copy from',
     // The same text as etc/automations.d/tour.yaml, the module's own automation/tour: a test keeps them one.
-    yaml: `# A tour of automations: seven small flows, every kind of node among them. Its devices are invented
+    yaml: `# A tour of automations: eight small flows, every kind of node among them. Its devices are invented
 # (example-…), so it switches nothing real. Open it under System → Automations and simulate it with
 # the flask, feeding it readings and presses by hand; or make one of your own from it (New, starting
 # point Tour; or automation-new <name> --from tour) and set your own devices. It comes off, and is
 # best left so.
-description: A tour of every kind of node in seven small flows; its devices are invented, so simulate it or copy it
+description: A tour of every kind of node in eight small flows; its devices are invented, so simulate it or copy it
 enabled: false
 nodes:
   # 1. Motion light. The hall lamp on at motion while it is dark and someone is home, off five
@@ -182,6 +182,13 @@ nodes:
   #    written in full; another kind of file is held back. file.
   scans: { type: file, label: Scans, folder: /home/example/inbox, match: '*.pdf', pos: [0, 2440], to: [scanned] }
   scanned: { type: debug, pos: [300, 2440] }
+
+  # 8. EiN's events. A failed run of the example-upkeep pipeline is written to the run log, and
+  #    raises an event of its own about the same node, for a pipeline that waits for it. Only the
+  #    administrator raises events: take raise-it out of a copy of your own. event in, event out.
+  upkeep-failed: { type: event-in, event: pipeline.instance.failed, with: pipeline=example-upkeep, pos: [0, 2600], to: [failed-run, raise-it] }
+  failed-run: { type: debug, pos: [300, 2540] }
+  raise-it: { type: event-out, event: example.upkeep.failed, pos: [300, 2660] }
 `,
   },
 ];

@@ -353,7 +353,7 @@ function SettingField(
           description={setting.help}
           value={shown(value)}
           disabled={disabled}
-          ff={setting.type === 'expression' || setting.type === 'line' ? 'monospace' : undefined}
+          ff={['expression', 'line', 'event'].includes(setting.type) ? 'monospace' : undefined}
           onChange={(event) => onChange(event.currentTarget.value || undefined)}
         />
       );

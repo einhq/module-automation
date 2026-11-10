@@ -1,13 +1,16 @@
 /**
  * The automation engine service: every automation that is on and has nothing wrong with it, each
- * fed from a durable queue bound to every device's readings, presses and coming and going (`dev.#`)
- * and by a clock, and read again when its file changes.
+ * fed from a durable queue bound to every device's readings, presses and coming and going (`dev.#`),
+ * from a second one bound to EiN's events while an automation listens for them, and by a clock, and
+ * read again when its file changes.
  *
- * Each runs with its owner's rights: it hears only the endpoints its owner may read, is primed
- * with the latest readings as its owner reads them, writes controls through the VFS as its owner,
- * and runs shell lines through `runas` as its owner. Its file nodes watch their folders through a
- * VFS subscription as its owner, which passes on only the files the owner may read. Those rights
- * are checked when it is read and every minute after; one that lost them is held back, saying why.
+ * Each runs with its owner's rights: it hears only the endpoints its owner may read and the events
+ * about nodes its owner may read, is primed with the latest readings as its owner reads them,
+ * writes controls and raises events through the VFS as its owner, and runs shell lines through
+ * `runas` as its owner. Its file nodes watch their folders through a VFS subscription as its owner,
+ * which passes on only the files the owner may read. Those rights are checked when it is read and
+ * every minute after; one that lost them is held back, saying why. An event an automation raised
+ * reaches pipelines, not automations, so two cannot set each other off for ever.
  *
  * A file whose change does not change how it runs (a node moved, a label) keeps its engine and
  * timers. A changed one starts afresh, primed, and takes over the deadlines its nodes waited for;
@@ -23,7 +26,20 @@
  */
 
 import type { DeviceMessage } from '@ein/api';
-import { type Access, accessOfUser, ADMIN_ACCESS, type Command, type NodeEvent, type ResourceHandleIf, shq } from '@ein/client';
+import {
+  type Access,
+  accessOfUser,
+  ADMIN_ACCESS,
+  type Command,
+  type DomainEvent,
+  EVENTS_NODE_PATH,
+  EVENTS_ROUTING_KEY,
+  type NodeEvent,
+  PIPELINE_EVENTS_ROUTING_KEY,
+  type ResourceHandleIf,
+  shq,
+  verifyAccess,
+} from '@ein/client';
 import type { AutomationProblem, AutomationValue } from './api.ts';
 import {
   accounts,
@@ -38,10 +54,31 @@ import {
   statePath,
   writeText,
 } from './automation-files.ts';
-import { type Action, AutomationEngine, type Deadline, type DeviceEvent, type FileEvent, type LogEntry, type Message, readsOf } from './automations/engine.ts';
+import {
+  type Action,
+  AutomationEngine,
+  type Deadline,
+  type DeviceEvent,
+  eventMatches,
+  type FactEvent,
+  type FileEvent,
+  type LogEntry,
+  type Message,
+  readsOf,
+} from './automations/engine.ts';
 import { fingerprint } from './automations/graph.ts';
 import { valueOfText } from './automations/values.ts';
-import { AUTOMATIONS_DIR, AUTOMATIONS_KEYS, AUTOMATIONS_QUEUE, MODULE_AUTOMATIONS_DIR, MODULE_RUN_LOGS_DIR, MODULE_STATE_DIR, RUN_LOGS_DIR, STATE_DIR } from './paths.ts';
+import {
+  AUTOMATION_EVENTS_QUEUE,
+  AUTOMATIONS_DIR,
+  AUTOMATIONS_KEYS,
+  AUTOMATIONS_QUEUE,
+  MODULE_AUTOMATIONS_DIR,
+  MODULE_RUN_LOGS_DIR,
+  MODULE_STATE_DIR,
+  RUN_LOGS_DIR,
+  STATE_DIR,
+} from './paths.ts';
 import { setEngineState } from './state.ts';
 import { startVirtualDevices } from './virtual.ts';
 
@@ -75,6 +112,8 @@ type Run = {
   key: string;
   /** The endpoints and devices whose messages it is given. */
   hears: Set<string>;
+  /** The events it listens for, as patterns. */
+  events: string[];
   /** The deadlines last written to its state file. */
   saved: string;
   /** Its file nodes' folders, watched as its owner. */
@@ -116,6 +155,37 @@ const fileEventsOf = (folder: string, event: NodeEvent): FileEvent[] => {
   }
 };
 
+/** Who raises the events an automation raises: those reach pipelines, never an automation. */
+const RAISED_BY = 'automation';
+
+/** One of EiN's events as an automation hears it, with when it was said, in ms. */
+const factOf = (data: unknown): (FactEvent & { source?: string }) | undefined => {
+  if (!data || typeof data !== 'object') return undefined;
+  const event = data as Partial<DomainEvent>;
+  if (typeof event.type !== 'string' || typeof event.subject !== 'string') return undefined;
+  return {
+    type: event.type,
+    subject: event.subject,
+    ...(event.data && typeof event.data === 'object' ? { data: event.data } : {}),
+    at: typeof event.time === 'number' ? event.time : Date.now(),
+    ...(typeof event.source === 'string' ? { source: event.source } : {}),
+  };
+};
+
+/**
+ * The routing keys the events `patterns` name come on: a pipeline's run starting and ending
+ * (`pipeline.…`) on the pipeline engine's own, every other on `/dev/events`'.
+ */
+const eventKeys = (patterns: string[]): string[] => {
+  const keys = new Set<string>();
+  for (const pattern of patterns) {
+    const first = pattern.split('.')[0];
+    if (first === 'pipeline' || first === '*' || first === '#') keys.add(PIPELINE_EVENTS_ROUTING_KEY);
+    if (first !== 'pipeline') keys.add(EVENTS_ROUTING_KEY);
+  }
+  return [...keys].sort();
+};
+
 export const runAutomationService = async ({ cmd, stopped, automationGid }: ServiceOptions): Promise<void> => {
   const { vfs } = cmd.sys;
   const log = (line: string) => cmd.writeLn(`automation-engine: ${line}`).catch(() => {});
@@ -129,6 +199,7 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
   for (const dir of [STATE_DIR, MODULE_STATE_DIR]) await vfs.ensure(cmd.access, 'directory', parent(dir), leaf(dir), { props: { mode: 0o700 } });
   await vfs.ensure(cmd.access, 'queue', parent(AUTOMATIONS_QUEUE), leaf(AUTOMATIONS_QUEUE), { attrs: { routingKeys: AUTOMATIONS_KEYS } });
   await vfs.update(cmd.access, AUTOMATIONS_QUEUE, { attrs: { routingKeys: AUTOMATIONS_KEYS } });
+  await vfs.ensure(cmd.access, 'queue', parent(AUTOMATION_EVENTS_QUEUE), leaf(AUTOMATION_EVENTS_QUEUE), { attrs: { routingKeys: [] } });
 
   const virtual = cmd.sys.devices ? await startVirtualDevices(cmd, log) : undefined;
   const users = accounts(vfs);
@@ -166,16 +237,22 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
     }
   };
 
+  /** Write a line to a node as the run's owner. */
+  const writeAs = async (run: Run, path: string, line: string) => {
+    const handle = await vfs.open(run.access, path, { mode: 'w' });
+    try {
+      await handle.write(encoder.encode(`${line}\n`));
+    } finally {
+      await handle.close();
+    }
+  };
+
   const act = async (run: Run, action: Action) => {
     state.actions++;
-    if (action.kind === 'control') {
-      const handle = await vfs.open(run.access, `/dev/${action.endpoint}`, { mode: 'w' });
-      try {
-        await handle.write(encoder.encode(`${action.value}\n`));
-      } finally {
-        await handle.close();
-      }
-      return;
+    if (action.kind === 'control') return await writeAs(run, `/dev/${action.endpoint}`, action.value);
+    if (action.kind === 'event') {
+      const event: DomainEvent = { id: crypto.randomUUID(), type: action.type, subject: action.subject, time: Date.now(), source: RAISED_BY, data: action.data };
+      return await writeAs(run, EVENTS_NODE_PATH, JSON.stringify(event));
     }
     const line = `export ${Object.entries(action.env).map(([name, value]) => `${name}=${shq(value)}`).join(' ')}; ${action.line}`;
     const result = await cmd.execute(`runas ${run.file.owner} ${shq(line)}`, { timeoutMs: action.timeoutMs });
@@ -186,8 +263,9 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
 
   /** The run's rights over what it reads and writes, or why it may not run. */
   const rights = async (file: AutomationFile, access: Access): Promise<AutomationProblem[]> => {
-    const { endpoints, controls, devices, folders } = readsOf(file.automation!);
+    const { endpoints, controls, devices, folders, raises } = readsOf(file.automation!);
     const problems: AutomationProblem[] = [];
+    if (raises.length && !(await mayRaise(access))) problems.push({ message: `its owner may not raise events: only the administrator writes ${EVENTS_NODE_PATH}` });
     for (const endpoint of endpoints) {
       if (!(await endpointState(vfs, access, endpoint)).readable) problems.push({ message: `its owner may not read ${endpoint}, or there is no such endpoint` });
     }
@@ -201,6 +279,12 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
       if (!(await folderReadable(vfs, access, folder))) problems.push({ message: `its owner may not read the folder ${folder}, or there is none` });
     }
     return problems;
+  };
+
+  /** Whether `access` may raise events: write `/dev/events`. */
+  const mayRaise = async (access: Access): Promise<boolean> => {
+    const node = await vfs.get(ADMIN_ACCESS, EVENTS_NODE_PATH).catch(() => undefined);
+    return node !== undefined && verifyAccess(access, node.props, 'w');
   };
 
   const readDeadlines = async (name: string): Promise<Deadline[]> => {
@@ -232,7 +316,7 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
 
   /** Start an automation: primed as its owner, with the deadlines it waited for. */
   const start = async (file: AutomationFile, owner: string, access: Access, key: string, deadlines: Deadline[]): Promise<Run> => {
-    const run = { file, owner, access, key, hears: new Set<string>(), saved: '', watches: [] as Run['watches'] } as Run;
+    const run = { file, owner, access, key, hears: new Set<string>(), events: [] as string[], saved: '', watches: [] as Run['watches'] } as Run;
     run.engine = new AutomationEngine(file.name, file.automation!, {
       schedule: (fn, ms) => {
         const timer = setTimeout(fn, ms);
@@ -246,8 +330,9 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
       },
       log: (entry) => void runLog(run, entry),
     });
-    const { endpoints, controls, devices, folders } = run.engine.reads();
+    const { endpoints, controls, devices, folders, events } = run.engine.reads();
     run.hears = new Set([...endpoints, ...controls, ...devices]);
+    run.events = events;
     const values = new Map<string, { value: AutomationValue; at: number }>();
     for (const endpoint of new Set([...endpoints, ...controls])) {
       const seed = await endpointState(vfs, access, endpoint);
@@ -325,6 +410,34 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
     const held = [...next].filter(([, problems]) => problems.length);
     if (held.length && !recheck) await log(`not run: ${held.map(([name, problems]) => `${name}: ${problems[0].message}`).join('; ')}`);
     known = next;
+    await bindEvents();
+  };
+
+  /** The events queue's keys: those of the events a running automation listens for, none while none does. */
+  let bound: string | undefined;
+  const bindEvents = async () => {
+    const keys = eventKeys([...runs.values()].flatMap((run) => run.events));
+    if (JSON.stringify(keys) === bound) return;
+    await vfs.update(cmd.access, AUTOMATION_EVENTS_QUEUE, { attrs: { routingKeys: keys } });
+    bound = JSON.stringify(keys);
+    await log(keys.length ? `listening for events on ${keys.join(', ')}` : 'listening for no events');
+  };
+
+  /** An event to every automation listening for it whose owner may read the node it is about. */
+  const hearEvent = async (fact: FactEvent & { source?: string }) => {
+    if (fact.source === RAISED_BY) return;
+    const quiet = fact.at < startedAt - STALE_MS;
+    const readable = new Map<number, boolean>();
+    for (const run of runs.values()) {
+      if (!run.events.some((pattern) => eventMatches(pattern, fact.type))) continue;
+      let may = readable.get(run.file.owner);
+      if (may === undefined) {
+        const node = await vfs.get(run.access, fact.subject).catch(() => undefined);
+        may = node !== undefined && verifyAccess(run.access, node.props, 'r');
+        readable.set(run.file.owner, may);
+      }
+      if (may) run.engine.handleEvent(fact, { quiet });
+    }
   };
 
   let reload: ReturnType<typeof setTimeout> | undefined;
@@ -355,6 +468,21 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
   const abort = new AbortController();
   stopped.then(() => abort.abort());
   let queue: ResourceHandleIf | undefined;
+  let eventsQueue: ResourceHandleIf | undefined;
+  const hearing = (async () => {
+    eventsQueue = await vfs.open(cmd.access, AUTOMATION_EVENTS_QUEUE, { mode: 'r+' });
+    while (!stopping) {
+      const bytes = await eventsQueue.read(1, abort.signal);
+      if (bytes.length === 0) continue;
+      try {
+        const fact = factOf(JSON.parse(decoder.decode(bytes)));
+        if (fact) await hearEvent(fact);
+      } catch (error) {
+        await log(`an event it could not read: ${error}`);
+      }
+      await eventsQueue.write(encoder.encode('ack\n'));
+    }
+  })().catch((error) => log(`reading events: ${error}`));
   try {
     queue = await vfs.open(cmd.access, AUTOMATIONS_QUEUE, { mode: 'r+' });
     while (!stopping) {
@@ -383,6 +511,8 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
     await virtual?.stop();
     for (const subscription of subscriptions) await subscription?.unsubscribe().catch(() => {});
     await queue?.close().catch(() => {});
+    await hearing;
+    await eventsQueue?.close().catch(() => {});
     setEngineState(undefined);
     await log('stopped');
   }

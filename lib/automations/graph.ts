@@ -27,7 +27,34 @@ const DAY_NAMES = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 const FULL_DAY_NAMES = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 
 /** A setting as the engine reads it. */
-type Setting = Value | number[] | Expression | { name: string; test: Test }[] | TimeOfDay;
+type Setting = Value | number[] | Expression | { name: string; test: Test }[] | TimeOfDay | Record<string, string>;
+
+const EVENT_WORD = /^[A-Za-z0-9_-]+$/;
+
+/** An event's type, dotted words; with `pattern`, a word may be `*` (one word) or `#` (any number). */
+const parseEvent = (value: unknown, pattern: boolean): string => {
+  const words = typeof value === 'string' ? value.trim().split('.') : [];
+  const ok = words.length > 0 && words.every((word) => EVENT_WORD.test(word) || (pattern && (word === '*' || word === '#')));
+  if (!ok) {
+    throw new Error(
+      pattern
+        ? `takes an event such as pipeline.instance.completed, with * for one word and # for any, not ${JSON.stringify(value)}`
+        : `takes an event such as automation.porch.arrived, words separated by dots, not ${JSON.stringify(value)}`,
+    );
+  }
+  return words.join('.');
+};
+
+/** An event input's `with`: `key=value` pairs separated by spaces, each to be found in the event's data. */
+const parseWith = (value: string): Record<string, string> => {
+  const pairs: Record<string, string> = {};
+  for (const pair of value.trim().split(/\s+/)) {
+    const at = pair.indexOf('=');
+    if (at <= 0) throw new Error(`with takes key=value pairs such as pipeline=place-upkeep, not ${JSON.stringify(pair)}`);
+    pairs[pair.slice(0, at)] = pair.slice(at + 1);
+  }
+  return pairs;
+};
 
 export type Node = {
   id: string;
@@ -138,6 +165,8 @@ const readSetting = (spec: SettingSpec, value: unknown): Setting => {
     case 'line':
       if (typeof value !== 'string' || !value.trim()) throw new Error(`takes text, not ${JSON.stringify(value)}`);
       return value;
+    case 'event':
+      return parseEvent(value, true);
     case 'duration': {
       const ms = typeof value === 'string' ? parseDuration(value) : undefined;
       if (ms === undefined || ms <= 0) throw new Error(`takes a duration such as 30s, 5m or 1h, not ${JSON.stringify(value)}`);
@@ -230,6 +259,15 @@ const readNode = (id: string, raw: unknown): Node => {
   }
   const problem = checkKind(kind, config);
   if (problem) throw new Error(problem);
+  if (kind.type === 'event-out') {
+    // What an event out raises is one event, not a pattern.
+    try {
+      parseEvent(config.event, false);
+    } catch (error) {
+      throw new Error(`event ${error instanceof Error ? error.message : error}`);
+    }
+  }
+  if (kind.type === 'event-in' && config.with !== undefined) config.with = parseWith(config.with as string);
   if (raw.label !== undefined && typeof raw.label !== 'string') throw new Error('label takes text');
   const pos = raw.pos;
   if (pos !== undefined && !(Array.isArray(pos) && pos.length === 2 && pos.every((n) => typeof n === 'number' && Number.isFinite(n)))) throw new Error('pos takes [x, y]');

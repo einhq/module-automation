@@ -2,15 +2,15 @@
 /**
  * automation-check — what is wrong with an automation, and what each of its nodes would say now:
  * the latest readings the caller may read sent through it, no action run. An endpoint the caller
- * may not read, a control they may not write, or a folder they may not read is a problem, as it is
- * for the engine when the caller owns it.
+ * may not read, a control they may not write, a folder they may not read, or an event they may not
+ * raise is a problem, as it is for the engine when the caller owns it.
  *
  *   automation-check hall-light
  *   automation-check --yaml "$text"     a draft, before it is written
  */
 
 import type { CmdReturn, Command } from '@ein/client';
-import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { ADMIN_ACCESS, collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, reportUnknownFlags, verifyAccess } from '@ein/client';
 import type { AutomationCheck, AutomationProblem, AutomationValue } from '@automation/api';
 import { problemLines, readAs, resolveAutomation } from '@automation/automation-commands';
 import { endpointState, folderReadable, localTime, onlineOf, parseAutomationText } from '@automation/automation-files';
@@ -35,9 +35,13 @@ const automationCheck = async (cmd: Command): CmdReturn => {
     }
     const check: AutomationCheck = { ...(name ? { name } : {}), problems, nodes: {}, endpoints: [] };
     if (read.automation) {
-      const { endpoints, controls, devices, folders } = readsOf(read.automation);
+      const { endpoints, controls, devices, folders, raises } = readsOf(read.automation);
       for (const folder of folders) {
         if (!(await folderReadable(cmd.sys.vfs, cmd.access, folder))) problems.push({ message: `you may not read the folder ${folder}, or there is none` });
+      }
+      if (raises.length) {
+        const events = await cmd.sys.vfs.get(ADMIN_ACCESS, EVENTS_NODE_PATH).catch(() => undefined);
+        if (!events || !verifyAccess(cmd.access, events.props, 'w')) problems.push({ message: `you may not raise events: only the administrator writes ${EVENTS_NODE_PATH}` });
       }
       const values = new Map<string, { value: AutomationValue; at: number }>();
       for (const endpoint of new Set([...endpoints, ...controls])) {

@@ -2,8 +2,9 @@
  * An automation tried out in the editor: its engine, the one the service runs, on a clock of its
  * own, with nothing real behind it. A control it writes is said and the simulated device takes the
  * value, as a real one would report it back; a command line is said, not run, and sends on an empty value;
- * a link out is said, and reaches the automation's own links in. Readings, presses, a device coming
- * or going, a file coming into a folder and a link's message are fed in by hand; the clock runs on from where it is told to,
+ * a link out is said, and reaches the automation's own links in; an event out is said, not raised.
+ * Readings, presses, a device coming or going, a file coming into a folder, a link's message and an
+ * event are fed in by hand; the clock runs on from where it is told to,
  * and timers, clocks and between nodes go off as it passes them.
  *
  * Pure but for `Intl`, so the editor runs it in the browser and the tests on Deno.
@@ -30,7 +31,7 @@ export type SimEntry = {
    * What happened: an input fed in, a node's send or a value it held back, an action it would have
    * taken, what a debug node said, an error, a clock going off.
    */
-  kind: 'input' | 'send' | 'skip' | 'control' | 'shell' | 'link' | 'debug' | 'error' | 'clock';
+  kind: 'input' | 'send' | 'skip' | 'control' | 'shell' | 'event' | 'link' | 'debug' | 'error' | 'clock';
   text: string;
 };
 
@@ -137,6 +138,20 @@ export class Simulation {
     this.changed();
   }
 
+  /**
+   * An event that event in node `id` listens for, about `subject`, with the data its `with` asks
+   * for. Its type is the node's own, a pattern as it is: each word of it matches itself.
+   */
+  sendEvent(id: string, subject: string): void {
+    const node = this.automation.nodes.get(id);
+    if (!node || node.type !== 'event-in') return;
+    const type = node.config.event as string;
+    this.echoes = 0;
+    this.add(id, 'input', `an event ${type} about ${subject}`);
+    this.engine.handleEvent({ type, subject, data: node.config.with as Record<string, string> | undefined, at: this.now });
+    this.changed();
+  }
+
   /** The clock moved to `target`: each timer due before it goes off in turn, and each minute ticks. */
   advanceTo(target: number): void {
     let minute = (Math.floor(this.now / MINUTE) + 1) * MINUTE;
@@ -205,6 +220,11 @@ export class Simulation {
       this.add(node, 'shell', `would run: ${action.line}${action.env.VALUE ? ` (VALUE=${action.env.VALUE})` : ''}`);
       this.changed();
       return '';
+    }
+    if (action.kind === 'event') {
+      this.add(node, 'event', `would raise ${action.type} about ${action.subject}`);
+      this.changed();
+      return;
     }
     const was = this.values.get(action.endpoint);
     const value = action.value === 'toggle' ? !truthy(was) : reported(action.value);

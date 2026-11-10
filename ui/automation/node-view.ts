@@ -69,6 +69,10 @@ export const summaryOf = (node: AutomationNodeSpec): string => {
     case 'link-in':
     case 'link-out':
       return text(node.name);
+    case 'event-in':
+      return `${text(node.event)}${has('under') ? ` under ${text(node.under)}` : ''}${has('with') ? ` ${text(node.with)}` : ''}`;
+    case 'event-out':
+      return `${text(node.event)}${has('subject') ? ` about ${text(node.subject)}` : ''}`;
     case 'compare':
       return ['is', 'not', 'above', 'below'].filter(has).map((key) => `${key === 'not' ? 'is not' : key} ${text(node[key])}`).join(', ');
     case 'switch':
