@@ -17,6 +17,8 @@ type CanvasProps = {
   onSelect: (selection: Selection | null) => void;
   onChange: (spec: AutomationSpec) => void;
   status?: Record<string, AutomationNodeStatus>;
+  /** The time `status` is told against: a simulation's own, else the real one. */
+  now?: number;
   problems: AutomationProblem[];
   /** Asks the canvas where a new node goes: the middle of what is in view. */
   placeRef?: { current: (() => [number, number]) | null };
@@ -54,7 +56,7 @@ const sameWire = (a: Wire, b: Wire) => a.from === b.from && a.output === b.outpu
  * Nodes may stand anywhere, below zero too: the drawing is the box round them and some room, and
  * when it grows to the left or up the view moves with it, so nothing on screen jumps.
  */
-export function Canvas({ spec, editable, selection, onSelect, onChange, status, problems, placeRef, seed, insets = { left: 0, right: 0 }, tools }: CanvasProps) {
+export function Canvas({ spec, editable, selection, onSelect, onChange, status, now, problems, placeRef, seed, insets = { left: 0, right: 0 }, tools }: CanvasProps) {
   const entries = Object.entries(spec.nodes);
   const bounds = useMemo(() => {
     if (!entries.length) return { x: -CANVAS_PAD, y: -CANVAS_PAD, width: CANVAS_PAD * 2 + NODE_WIDTH, height: CANVAS_PAD * 2 + 64 };
@@ -238,7 +240,7 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
             const height = nodeHeight(node);
             const wrong = problemsOf(id);
             const chosen = selection?.kind === 'node' && selection.id === id;
-            const said = statusText(status?.[id]);
+            const said = statusText(status?.[id], now);
             return (
               <Box
                 key={id}

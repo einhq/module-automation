@@ -77,20 +77,20 @@ export const summaryOf = (node: AutomationNodeSpec): string => {
   }
 };
 
-const ago = (iso: string): string => {
-  const seconds = Math.round((Date.now() - Date.parse(iso)) / 1000);
+const ago = (iso: string, now: number): string => {
+  const seconds = Math.round((now - Date.parse(iso)) / 1000);
   return seconds < 60 ? `${Math.max(0, seconds)} s ago` : seconds < 3600 ? `${Math.round(seconds / 60)} min ago` : `${Math.round(seconds / 3600)} h ago`;
 };
 
-const until = (iso: string): string => {
-  const seconds = Math.max(0, Math.round((Date.parse(iso) - Date.now()) / 1000));
+const until = (iso: string, now: number): string => {
+  const seconds = Math.max(0, Math.round((Date.parse(iso) - now) / 1000));
   return seconds < 120 ? `in ${seconds} s` : `in ${Math.round(seconds / 60)} min`;
 };
 
-/** What a running node last did, in a few words: what it sent and when, or what it waits for. */
-export const statusText = (status: AutomationNodeStatus | undefined): string => {
+/** What a running node last did, in a few words: what it sent and when, or what it waits for, as of `now`. */
+export const statusText = (status: AutomationNodeStatus | undefined, now = Date.now()): string => {
   if (!status) return '';
-  if (status.due) return `next ${until(status.due)}`;
-  if (status.value !== undefined) return `sent ${JSON.stringify(status.value)}${status.at ? `, ${ago(status.at)}` : ''}`;
+  if (status.due) return `next ${until(status.due, now)}`;
+  if (status.value !== undefined) return `sent ${JSON.stringify(status.value)}${status.at ? `, ${ago(status.at, now)}` : ''}`;
   return '';
 };

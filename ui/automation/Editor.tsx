@@ -519,6 +519,7 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
                 onSelect={sim ? () => {} : setSelection}
                 onChange={change}
                 status={sim ? sim.status() : status}
+                now={sim?.now}
                 problems={problems}
                 placeRef={place}
                 seed={`automation:${name}`}
