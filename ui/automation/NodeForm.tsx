@@ -1,9 +1,9 @@
 import { TablerIcon } from '@ein/ui/components';
-import { shq } from '@ein/ui/lib';
+import { agoText, readingText, shq } from '@ein/ui/lib';
 import { execCommand } from '@ein/ui/signals';
-import { ActionIcon, Alert, Button, Group, MultiSelect, NumberInput, Select, Stack, Switch, Text, TextInput } from '@mantine/core';
+import { ActionIcon, Alert, Box, Button, Group, Loader, MultiSelect, NumberInput, ScrollArea, Select, Stack, Switch, Text, TextInput, UnstyledButton } from '@mantine/core';
 import { useEffect, useState } from 'react';
-import type { DeviceInfo, DeviceSummary } from '@ein/api';
+import type { DeviceInfo, DeviceSummary, EndpointSummary } from '@ein/api';
 import type { AutomationNodeSpec, AutomationProblem } from '../../lib/api.ts';
 import { KINDS, type SettingSpec } from '../../lib/automations/catalog.ts';
 
@@ -36,38 +36,100 @@ const devices = () =>
     throw error;
   });
 
-/** A device's endpoints, those a control node may write when `controls`. */
+/**
+ * A device, then one of its endpoints from a list beneath it, each with its latest value: those a
+ * control node may write when `controls`. A device picked takes its first endpoint at once, so the
+ * node never names a device without one; a node left like that takes it when it is opened.
+ */
 function EndpointPicker({ value, controls, disabled, onChange }: { value: string; controls: boolean; disabled: boolean; onChange: (value: string) => void }) {
   const [device, endpoint] = value.split('/');
   const [list, setList] = useState<DeviceSummary[]>([]);
-  const [endpoints, setEndpoints] = useState<DeviceInfo['endpointList']>([]);
+  const [loaded, setLoaded] = useState<{ device: string; endpoints: EndpointSummary[] } | null>(null);
+  const [picking, setPicking] = useState<string | null>(null);
+  const offeredOf = (endpoints: EndpointSummary[]) => endpoints.filter((each) => !each.retired && (controls ? each.type === 'control' : each.type !== 'track'));
+  const endpointsOf = (name: string) => execCommand<DeviceInfo>(`device-show ${shq(name)}`).then((info) => info.endpointList).catch(() => [] as EndpointSummary[]);
   useEffect(() => {
     devices().then(setList).catch(() => setList([]));
   }, []);
   useEffect(() => {
-    if (!device) return setEndpoints([]);
-    execCommand<DeviceInfo>(`device-show ${shq(device)}`).then((info) => setEndpoints(info.endpointList)).catch(() => setEndpoints([]));
+    if (!device) return setLoaded(null);
+    let live = true;
+    endpointsOf(device).then((endpoints) => {
+      if (!live) return;
+      setLoaded({ device, endpoints });
+      const first = offeredOf(endpoints)[0];
+      if (!endpoint && first && !disabled) onChange(`${device}/${first.name}`);
+    });
+    return () => {
+      live = false;
+    };
   }, [device]);
-  const offered = endpoints.filter((each) => !each.retired && (controls ? each.type === 'control' : each.type !== 'track'));
+  const pick = async (next: string | null) => {
+    if (!next) return onChange('');
+    setPicking(next);
+    const endpoints = await endpointsOf(next);
+    setPicking(null);
+    setLoaded({ device: next, endpoints });
+    const first = offeredOf(endpoints)[0];
+    onChange(first ? `${next}/${first.name}` : `${next}/`);
+  };
+  const offered = loaded?.device === device ? offeredOf(loaded.endpoints) : [];
   return (
-    <Group grow gap='xs' align='flex-start'>
+    <Stack gap={6}>
       <Select
         label='Device'
         searchable
-        disabled={disabled}
+        disabled={disabled || picking !== null}
         data={list.map((each) => ({ value: each.name, label: each.label === each.name ? each.name : `${each.label} (${each.name})` }))}
-        value={device || null}
-        onChange={(next) => onChange(next ? `${next}/` : '')}
+        value={picking ?? (device || null)}
+        onChange={(next) => void pick(next)}
       />
-      <Select
-        label={controls ? 'Control' : 'Endpoint'}
-        searchable
-        disabled={disabled || !device}
-        data={offered.map((each) => ({ value: each.name, label: each.label && each.label !== each.name ? `${each.label} (${each.name})` : each.name }))}
-        value={endpoint || null}
-        onChange={(next) => onChange(next ? `${device}/${next}` : `${device}/`)}
-      />
-    </Group>
+      {device && (
+        <Stack gap={2}>
+          <Text size='sm' fw={500}>{controls ? 'Control' : 'Endpoint'}</Text>
+          {loaded?.device !== device || picking
+            ? <Loader size='sm' />
+            : !offered.length
+            ? <Text size='sm' c='dimmed'>{controls ? 'It has no control to switch.' : 'It has no endpoint to read.'}</Text>
+            : (
+              <ScrollArea.Autosize mah={280} type='auto'>
+                <Stack gap={2} role='radiogroup' aria-label={controls ? 'Control' : 'Endpoint'}>
+                  {offered.map((each) => {
+                    const chosen = each.name === endpoint;
+                    return (
+                      <UnstyledButton
+                        key={each.name}
+                        role='radio'
+                        aria-checked={chosen}
+                        disabled={disabled}
+                        className='mrx-hover-row'
+                        onClick={() => onChange(`${device}/${each.name}`)}
+                        style={{
+                          padding: '6px 8px',
+                          borderRadius: 'var(--mantine-radius-sm)',
+                          border: `1px solid ${chosen ? 'var(--mantine-primary-color-filled)' : 'var(--mantine-color-default-border)'}`,
+                          background: chosen ? 'var(--mantine-primary-color-light)' : undefined,
+                        }}
+                      >
+                        <Group gap={8} wrap='nowrap' justify='space-between'>
+                          <Box style={{ minWidth: 0 }}>
+                            <Text size='sm' fw={chosen ? 600 : 400} truncate>{each.label && each.label !== each.name ? each.label : each.name}</Text>
+                            {each.label && each.label !== each.name && <Text size='xs' c='dimmed' truncate>{each.name}</Text>}
+                          </Box>
+                          <Box style={{ textAlign: 'right', flex: '0 0 auto' }}>
+                            <Text size='sm' ff='monospace'>{readingText(each.last?.value, each.unit)}</Text>
+                            {each.last && <Text size='xs' c='dimmed'>{agoText(each.last.at)}</Text>}
+                          </Box>
+                        </Group>
+                      </UnstyledButton>
+                    );
+                  })}
+                </Stack>
+              </ScrollArea.Autosize>
+            )}
+        </Stack>
+      )}
+    </Stack>
   );
 }
 
