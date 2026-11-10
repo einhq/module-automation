@@ -222,6 +222,11 @@ export class AutomationEngine {
     }));
   }
 
+  /** Once the actions begun so far are done, and what they set going has been sent on. */
+  settled(): Promise<void> {
+    return this.actions;
+  }
+
   /** The deadlines it waits for, to be kept over a restart. */
   pending(): Deadline[] {
     return [...this.states].flatMap(([node, state]) =>

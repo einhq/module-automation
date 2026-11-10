@@ -19,6 +19,7 @@ import type { AutomationProblem, AutomationSpec, AutomationValue } from './api.t
 import type { LocalTime } from './automations/engine.ts';
 import { type Automation, readAutomation } from './automations/graph.ts';
 import { AUTOMATIONS_DIR, MODULE_AUTOMATIONS_DIR, MODULE_RUN_LOGS_DIR, MODULE_STATE_DIR, RUN_LOGS_DIR, STATE_DIR } from './paths.ts';
+import { localTimeIn } from './time.ts';
 
 export type AutomationFile = {
   /** `<name>`, or `<module>/<name>`. */
@@ -215,21 +216,4 @@ export const onlineOf = async (vfs: NodeVFS, access: Access, devices: string[]):
 };
 
 /** The day, the minute of the day and the weekday at `ms`, in the system's time zone. */
-export const localTime = (ms: number): LocalTime => {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: SYSTEM_TIME_ZONE,
-    hourCycle: 'h23',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    weekday: 'short',
-  }).formatToParts(new Date(ms));
-  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? '';
-  return {
-    day: `${get('year')}-${get('month')}-${get('day')}`,
-    minute: Number(get('hour')) * 60 + Number(get('minute')),
-    weekday: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].indexOf(get('weekday')),
-  };
-};
+export const localTime = (ms: number): LocalTime => localTimeIn(ms, SYSTEM_TIME_ZONE);

@@ -11,6 +11,8 @@ import { readAutomation } from '../../lib/automations/graph.ts';
 import { Canvas, type Selection, useDeleteKey } from './Canvas.tsx';
 import { addNode, disconnect, nameProblem, removeNode, renameNode, setSettings } from './graph-edit.ts';
 import { NodeForm } from './NodeForm.tsx';
+import type { Simulation } from './simulation.ts';
+import { Simulator, startSimulation } from './Simulator.tsx';
 
 export type AutomationTab = 'graph' | 'yaml' | 'runs';
 
@@ -251,7 +253,39 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
   }, [name]);
 
   const editable = Boolean(detail?.writable && !detail.module);
-  const problems = useMemo(() => readAutomation(spec).problems, [spec]);
+  const read = useMemo(() => readAutomation(spec), [spec]);
+  const problems = read.problems;
+
+  // A simulation of the graph as it is: nothing real behind it, and the graph not changed meanwhile.
+  const [sim, setSim] = useState<Simulation | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [, setSimVersion] = useState(0);
+  const simulate = async () => {
+    if (!read.automation) return;
+    setStarting(true);
+    try {
+      const next = await startSimulation(read.automation);
+      setSelection(null);
+      setSim(next);
+    } catch (error) {
+      failed(error);
+    } finally {
+      setStarting(false);
+    }
+  };
+  useEffect(() => {
+    if (!sim) return;
+    // Drawn at once, and again once what it set going (a control's device reporting back) has run.
+    sim.onChange = () => {
+      setSimVersion((v) => v + 1);
+      void sim.settled().then(() => setSimVersion((v) => v + 1));
+    };
+    return () => {
+      sim.onChange = undefined;
+      sim.stop();
+    };
+  }, [sim]);
+  useEffect(() => setSim(null), [tab]);
 
   // What each node last did, while the graph is in view and the automation runs.
   useEffect(() => {
@@ -292,7 +326,7 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
     setSelection(null);
     setRemoving(null);
   };
-  useDeleteKey(tab === 'graph' && editable && selection !== null, removeSelected);
+  useDeleteKey(tab === 'graph' && editable && !sim && selection !== null, removeSelected);
 
   const add = (type: string) => {
     const at = place.current?.() ?? [0, 0];
@@ -407,6 +441,13 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
           <Badge variant='light' color='gray' size='lg' style={{ flex: '0 0 auto' }}>{detail.module}</Badge>
         </Tooltip>
       )}
+      {sim && (
+        <Tooltip label='Simulating: nothing real is switched or run'>
+          <Badge color='grape' variant='filled' size='lg' leftSection={<TablerIcon name='flask' size={14} />} style={{ flex: '0 0 auto' }}>
+            {phone ? null : 'Simulating'}
+          </Badge>
+        </Tooltip>
+      )}
       {shownProblems.length > 0
         ? <Problems problems={shownProblems} phone={phone} onPick={tab === 'graph' ? (node) => spec.nodes[node] && setSelection({ kind: 'node', id: node }) : undefined} />
         : (
@@ -427,11 +468,29 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
     </>
   );
 
-  const formOpen = Boolean(form) && !phone;
-  const tools = tab === 'graph' && editable && (
+  const panel = sim ? <Simulator sim={sim} onClose={() => setSim(null)} /> : form;
+  const formOpen = Boolean(panel) && !phone;
+  const tools = tab === 'graph' && (
     <>
-      <Palette onAdd={add} phone={phone} />
-      {selection?.kind === 'wire' && (
+      <Tooltip
+        label={sim ? 'Stop simulating' : read.automation ? 'Simulate: feed it inputs by hand, with nothing real switched or run' : 'Its problems must be gone to simulate it'}
+        position='left'
+      >
+        <ActionIcon
+          variant='filled'
+          color={sim ? 'grape' : 'dark'}
+          size={36}
+          loading={starting}
+          disabled={!sim && !read.automation}
+          onClick={() => sim ? setSim(null) : void simulate()}
+          aria-label={sim ? 'Stop simulating' : 'Simulate'}
+          aria-pressed={Boolean(sim)}
+        >
+          <TablerIcon name='flask' size={18} />
+        </ActionIcon>
+      </Tooltip>
+      {editable && !sim && <Palette onAdd={add} phone={phone} />}
+      {editable && !sim && selection?.kind === 'wire' && (
         <Tooltip label='Remove the wire' position='left'>
           <ActionIcon variant='filled' color='red' size={36} onClick={removeSelected} aria-label='Remove the wire'>
             <TablerIcon name='trash' size={18} />
@@ -455,11 +514,11 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
             <>
               <Canvas
                 spec={spec}
-                editable={editable}
-                selection={selection}
-                onSelect={setSelection}
+                editable={editable && !sim}
+                selection={sim ? null : selection}
+                onSelect={sim ? () => {} : setSelection}
                 onChange={change}
-                status={status}
+                status={sim ? sim.status() : status}
                 problems={problems}
                 placeRef={place}
                 seed={`automation:${name}`}
@@ -473,13 +532,19 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
                   style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: FORM_WIDTH, zIndex: 2, borderLeft: '1px solid var(--mantine-color-default-border)' }}
                 >
                   <ScrollArea h='100%' type='auto'>
-                    <Box p='md'>{form}</Box>
+                    <Box p='md'>{panel}</Box>
                   </ScrollArea>
                 </Paper>
               )}
               {phone && (
-                <Drawer opened={Boolean(form)} onClose={() => setSelection(null)} position='bottom' size='85%' title='Node'>
-                  {form}
+                <Drawer
+                  opened={Boolean(panel)}
+                  onClose={() => sim ? setSim(null) : setSelection(null)}
+                  position='bottom'
+                  size={sim ? '60%' : '85%'}
+                  title={sim ? 'Simulation' : 'Node'}
+                >
+                  {panel}
                 </Drawer>
               )}
             </>
