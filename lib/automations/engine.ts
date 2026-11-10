@@ -104,7 +104,7 @@ type EngineOptions = {
 const MAX_HOPS = 64;
 const SHELL_TIMEOUT_MS = 30_000;
 /** How long a file must go unwritten before a file node sends it: a file written in pieces is sent once, whole. */
-export const FILE_SETTLE_MS = 2000;
+const FILE_SETTLE_MS = 2000;
 /** The most files a file node waits on to be written: past it, the longest waiting is forgotten. */
 const MAX_WAITING_FILES = 1000;
 
