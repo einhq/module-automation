@@ -13,6 +13,8 @@ export type Selection = { kind: 'node'; id: string } | { kind: 'wire'; wire: Wir
 type CanvasProps = {
   spec: AutomationSpec;
   editable: boolean;
+  /** Whether a card may be dragged to a new place: while editing, and while simulating, which reads nothing of where cards stand. */
+  movable?: boolean;
   selection: Selection | null;
   onSelect: (selection: Selection | null) => void;
   onChange: (spec: AutomationSpec) => void;
@@ -56,7 +58,9 @@ const sameWire = (a: Wire, b: Wire) => a.from === b.from && a.output === b.outpu
  * Nodes may stand anywhere, below zero too: the drawing is the box round them and some room, and
  * when it grows to the left or up the view moves with it, so nothing on screen jumps.
  */
-export function Canvas({ spec, editable, selection, onSelect, onChange, status, now, problems, placeRef, seed, insets = { left: 0, right: 0 }, tools }: CanvasProps) {
+export function Canvas(
+  { spec, editable, movable = editable, selection, onSelect, onChange, status, now, problems, placeRef, seed, insets = { left: 0, right: 0 }, tools }: CanvasProps,
+) {
   const entries = Object.entries(spec.nodes);
   const bounds = useMemo(() => {
     if (!entries.length) return { x: -CANVAS_PAD, y: -CANVAS_PAD, width: CANVAS_PAD * 2 + NODE_WIDTH, height: CANVAS_PAD * 2 + 64 };
@@ -118,7 +122,7 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
 
   const onCardDown = (id: string) => (event: ReactPointerEvent) => {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
-    if (!editable) return;
+    if (!movable) return;
     (event.currentTarget as Element).setPointerCapture(event.pointerId);
     drag.current = { id, pointer: event.pointerId, x: event.clientX, y: event.clientY, from: posOf(spec.nodes[id]), moved: false };
   };
@@ -263,7 +267,7 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
                   // A band in the kind's colour behind its title, edged with the colour at the top.
                   background: `linear-gradient(var(--mantine-color-${color}-light) 0 ${CARD_BAND}px, transparent ${CARD_BAND}px), var(--mrx-surface-raised)`,
                   boxShadow: `inset 0 3px 0 var(--mantine-color-${color}-filled), var(--mantine-shadow-xs)`,
-                  cursor: editable ? 'move' : 'pointer',
+                  cursor: movable ? 'move' : 'pointer',
                   padding: '0 14px',
                 }}
               >

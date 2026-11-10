@@ -515,6 +515,7 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
               <Canvas
                 spec={spec}
                 editable={editable && !sim}
+                movable={editable}
                 selection={sim ? null : selection}
                 onSelect={sim ? () => {} : setSelection}
                 onChange={change}
