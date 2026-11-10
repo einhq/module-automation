@@ -169,7 +169,7 @@ export default function FoundDevicesPage() {
           {error && <Alert icon={<TablerIcon name='alert-circle' size={16} />} color='red'>{error.message}</Alert>}
           {data && !data.round && (
             <Alert icon={<TablerIcon name='info-circle' size={16} />} color='blue'>
-              The network listener has not been heard. It runs beside the MQTT broker, which setup.sh --mqtt adds.
+              The network listener has not been heard. It runs in the automation sidecar beside the MQTT broker, which setup.sh --automation adds.
             </Alert>
           )}
           {loading && !data ? <PageLoader /> : (

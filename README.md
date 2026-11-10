@@ -18,8 +18,7 @@ clock says so; the Automations page draws and edits them, and `automations`, `au
 whether any is on) and whose controls hold what is set.
 
 Devices that are on the network but not yet on the broker are found too. A listener beside the
-broker on the host's own network (EiN's deployment runs it with the broker) asks mDNS and SSDP
-what is there and publishes each address it heard as a retained message under
+broker on the host's own network (the sidecar, below) asks mDNS and SSDP what is there and publishes each address it heard as a retained message under
 `ein/discovery/host/<id>`, with its own `ein/discovery/status`. The bridge keeps those:
 `automation-found` names each one (a Shelly, ESPHome, a HomeKit or Matter accessory, a Hue bridge,
 a speaker, a printer, …), says whether it is a device already and, given one, shows all the
@@ -39,6 +38,12 @@ many can be added, and opens them as a page of their own.
 
 The devices, their pages and the device commands are EiN core's; this module brings the drivers and
 the automations.
+
+`sidecar/` is the image of what the module's devices need beside EiN, `ghcr.io/einhq/automation`,
+which EiN's deployment runs with `setup.sh --automation`: the MQTT broker (Mosquitto), the network
+listener (`discovery.ts`) and a restreamer for cameras (go2rtc), in one container on the host's
+network under a small supervisor (`supervisor.ts`, which says what each reads). GitHub builds it when
+a push to main changes the folder.
 
 An [EiN](https://github.com/einhq) module. It is developed and tested inside a checkout of EiN core,
 as `modules/automation`, and a deployment chooses whether to run it.

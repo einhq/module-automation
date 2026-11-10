@@ -34,7 +34,7 @@
         "type": "string",
         "default": "",
         "label": "MQTT broker",
-        "description": "The broker devices talk to, as mqtt://host:1883 or mqtts://host:8883. setup.sh --mqtt runs one beside EiN and sets this.",
+        "description": "The broker devices talk to, as mqtt://host:1883 or mqtts://host:8883. setup.sh --automation runs one beside EiN, in the automation sidecar, and sets this.",
         "group": "Automation",
         "emptyMeans": "no device is heard on a broker; those EiN asks over the network are still read",
         "restarts": [
@@ -126,7 +126,7 @@
         "type": "string",
         "default": "",
         "label": "Broker for devices",
-        "description": "The broker's address as the devices on the network reach it, host:port, which a device added from the network is given. setup.sh --mqtt runs a listener beside the broker that says it.",
+        "description": "The broker's address as the devices on the network reach it, host:port, which a device added from the network is given. setup.sh --automation runs a listener beside the broker that says it.",
         "group": "Automation",
         "emptyMeans": "the address the network listener says"
       },
@@ -136,7 +136,7 @@
         "type": "string",
         "default": "",
         "label": "Device MQTT user",
-        "description": "The account a device added from the network signs in to the broker with. setup.sh --mqtt sets it to device.",
+        "description": "The account a device added from the network signs in to the broker with. setup.sh --automation sets it to device.",
         "group": "Automation",
         "emptyMeans": "devices sign in without an account"
       },

@@ -1,0 +1,28 @@
+# The automation sidecar, ghcr.io/einhq/automation: the MQTT broker, the network listener and the
+# restreamer that the Automation module's devices need beside EiN, in one container that runs on the
+# host's network (supervisor.ts says what each is and what it reads). Built from this folder:
+#
+#   podman build -t localhost/ein-automation sidecar
+#
+# Mosquitto and ffmpeg come from Alpine; go2rtc is its release binary, checked against its sum.
+# ffmpeg is go2rtc's, for a JPEG frame of an H.264 or H.265 stream.
+FROM docker.io/denoland/deno:alpine-2.9.6
+
+ARG GO2RTC_VERSION=1.9.15
+ARG TARGETARCH
+RUN apk add --no-cache mosquitto ffmpeg && \
+    arch=${TARGETARCH:-amd64} && \
+    case $arch in \
+      amd64) sum=20b46c6910734cb05ecefb234066f36868ff19b42ba1418a7a32e13a3e035712 ;; \
+      arm64) sum=af416f22b21a24ab83b8d78642190b4932ae695b4e386853f11d1b0319781763 ;; \
+      *) echo "no go2rtc sum for $arch" >&2; exit 1 ;; \
+    esac && \
+    wget -qO /usr/local/bin/go2rtc "https://github.com/AlexxIT/go2rtc/releases/download/v${GO2RTC_VERSION}/go2rtc_linux_${arch}" && \
+    echo "$sum  /usr/local/bin/go2rtc" | sha256sum -c - && \
+    chmod 755 /usr/local/bin/go2rtc
+
+COPY supervisor.ts discovery.ts /app/
+
+# Root in the container: the broker drops to its own user, and the supervisor gives it its data.
+USER root
+ENTRYPOINT ["/tini", "--", "deno", "run", "--allow-env", "--allow-read", "--allow-write=/data,/run/automation", "--allow-run", "--allow-net=127.0.0.1", "/app/supervisor.ts"]
