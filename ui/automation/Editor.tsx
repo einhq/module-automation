@@ -2,16 +2,17 @@ import { CodeMirror, EmptyState, PageLoader, TablerIcon } from '@ein/ui/componen
 import { useLogFollow, usePhone } from '@ein/ui/hooks';
 import { shq } from '@ein/ui/lib';
 import { execCommand, notify } from '@ein/ui/signals';
-import { Alert, Badge, Box, Button, Drawer, Group, Menu, ScrollArea, SegmentedControl, Stack, Switch, Text, Tooltip } from '@mantine/core';
+import { ActionIcon, Badge, Box, Button, Drawer, Group, Menu, Paper, Popover, ScrollArea, Stack, Switch, Text, Tooltip, UnstyledButton } from '@mantine/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { AutomationDetail, AutomationNodeStatus, AutomationRunStatus, AutomationSetAnswer, AutomationSpec } from '../../lib/api.ts';
+import { createPortal } from 'react-dom';
+import type { AutomationDetail, AutomationNodeStatus, AutomationProblem, AutomationRunStatus, AutomationSetAnswer, AutomationSpec } from '../../lib/api.ts';
 import { KINDS } from '../../lib/automations/catalog.ts';
 import { readAutomation } from '../../lib/automations/graph.ts';
 import { Canvas, type Selection, useDeleteKey } from './Canvas.tsx';
 import { addNode, disconnect, removeNode, setSettings } from './graph-edit.ts';
 import { NodeForm } from './NodeForm.tsx';
 
-type Tab = 'graph' | 'yaml' | 'runs';
+export type AutomationTab = 'graph' | 'yaml' | 'runs';
 
 /** How often a running automation's nodes are asked what they did, while its graph is open. */
 const STATUS_MS = 3000;
@@ -26,59 +27,100 @@ const GROUPS = [
 
 const failed = (error: unknown) => notify({ message: error instanceof Error ? error.message : String(error), color: 'red' });
 
-/** The kinds of node to add, by group: a list beside the canvas, or a menu on a phone. */
-function Palette({ onAdd, menu }: { onAdd: (type: string) => void; menu?: boolean }) {
+/** How wide the panel of the node tapped is, over the canvas's right edge. */
+const FORM_WIDTH = 320;
+
+/** The kinds of node to add, by group, in a menu from a button on the canvas. */
+function Palette({ onAdd, phone }: { onAdd: (type: string) => void; phone: boolean }) {
   const kinds = Object.values(KINDS);
-  if (menu) {
-    return (
-      <Menu shadow='md' width={260} position='bottom-start'>
-        <Menu.Target>
-          <Button size='xs' variant='default' leftSection={<TablerIcon name='plus' size={14} />}>Add</Button>
-        </Menu.Target>
-        <Menu.Dropdown style={{ maxHeight: '70dvh', overflowY: 'auto' }}>
-          {GROUPS.map(({ group, label }) => (
-            <Box key={group}>
-              <Menu.Label>{label}</Menu.Label>
-              {kinds.filter((kind) => kind.group === group).map((kind) => (
+  return (
+    <Menu shadow='md' width={260} position='left-start'>
+      <Menu.Target>
+        <Tooltip label='Add a node' position='left' disabled={phone}>
+          <ActionIcon variant='filled' color='dark' size={36} aria-label='Add a node'>
+            <TablerIcon name='plus' size={18} />
+          </ActionIcon>
+        </Tooltip>
+      </Menu.Target>
+      <Menu.Dropdown style={{ maxHeight: '70dvh', overflowY: 'auto' }}>
+        {GROUPS.map(({ group, label }) => (
+          <Box key={group}>
+            <Menu.Label>{label}</Menu.Label>
+            {kinds.filter((kind) => kind.group === group).map((kind) => (
+              <Tooltip key={kind.type} label={kind.description} position='left' openDelay={400} multiline w={240} disabled={phone}>
                 <Menu.Item
-                  key={kind.type}
                   leftSection={<TablerIcon name={kind.icon} size={16} />}
-                  onClick={() => onAdd(kind.type)}
+                  onClick={() =>
+                    onAdd(kind.type)}
                 >
                   {kind.label}
                 </Menu.Item>
-              ))}
-            </Box>
-          ))}
-        </Menu.Dropdown>
-      </Menu>
-    );
-  }
-  return (
-    <ScrollArea w={160} h='100%' type='auto' style={{ flex: '0 0 160px', borderRight: '1px solid var(--mantine-color-default-border)' }}>
-      <Stack gap={2} p='xs'>
-        {GROUPS.map(({ group, label }) => (
-          <Box key={group} mb={6}>
-            <Text size='xs' c='dimmed' fw={600} tt='uppercase' px={6} py={4}>{label}</Text>
-            {kinds.filter((kind) => kind.group === group).map((kind) => (
-              <Tooltip key={kind.type} label={kind.description} position='right' openDelay={400} multiline w={240}>
-                <Button
-                  variant='subtle'
-                  color='gray'
-                  size='compact-sm'
-                  fullWidth
-                  justify='flex-start'
-                  leftSection={<TablerIcon name={kind.icon} size={16} />}
-                  onClick={() => onAdd(kind.type)}
-                >
-                  {kind.label}
-                </Button>
               </Tooltip>
             ))}
           </Box>
         ))}
-      </Stack>
-    </ScrollArea>
+      </Menu.Dropdown>
+    </Menu>
+  );
+}
+
+/**
+ * How many problems an automation has, a label that opens them; one about a node, tapped, picks
+ * that node when `onPick` is given.
+ */
+function Problems({ problems, phone, onPick }: { problems: AutomationProblem[]; phone: boolean; onPick?: (node: string) => void }) {
+  const [opened, setOpened] = useState(false);
+  const count = `${problems.length} ${problems.length === 1 ? 'problem' : 'problems'}`;
+  return (
+    <Popover opened={opened} onChange={setOpened} position='bottom-end' shadow='md' width={340} withArrow>
+      <Popover.Target>
+        <Badge
+          component='button'
+          type='button'
+          color='red'
+          variant='filled'
+          size='lg'
+          aria-label={count}
+          onClick={() => setOpened((was) => !was)}
+          leftSection={<TablerIcon name='alert-triangle' size={14} />}
+          rightSection={<TablerIcon name={opened ? 'chevron-up' : 'chevron-down'} size={12} />}
+          style={{ cursor: 'pointer', flex: '0 0 auto' }}
+        >
+          {phone ? problems.length : count}
+        </Badge>
+      </Popover.Target>
+      <Popover.Dropdown p={4}>
+        <ScrollArea.Autosize mah={360} type='auto'>
+          <Stack gap={0}>
+            {problems.map((problem, index) => {
+              const line = (
+                <>
+                  {problem.node && <Text size='sm' fw={600}>{problem.node}</Text>}
+                  <Text size='sm'>{problem.message}</Text>
+                </>
+              );
+              const node = problem.node;
+              return node && onPick
+                ? (
+                  <UnstyledButton
+                    key={index}
+                    className='mrx-hover-row'
+                    p={8}
+                    style={{ borderRadius: 'var(--mantine-radius-sm)' }}
+                    onClick={() => {
+                      onPick(node);
+                      setOpened(false);
+                    }}
+                  >
+                    {line}
+                  </UnstyledButton>
+                )
+                : <Box key={index} p={8}>{line}</Box>;
+            })}
+          </Stack>
+        </ScrollArea.Autosize>
+      </Popover.Dropdown>
+    </Popover>
   );
 }
 
@@ -113,18 +155,25 @@ function Runs({ path }: { path: string }) {
 }
 
 /**
- * One automation: its graph to draw and wire, its YAML, and what it did. The graph and the YAML
- * are the same file; each tab saves its own changes, the graph as YAML in the editor's order, the
- * YAML as typed, and while one has changes not saved the other shows the file as it was.
+ * One automation, filling what is below the page's bar: its graph to draw and wire, its YAML, or
+ * what it did, as `tab` says. Its problems, its switch and Save stand in the bar, in `controls`; the
+ * leftmost `inset` px are under the page's list. The graph and the YAML are the same file; each tab
+ * saves its own changes, the graph as YAML in the editor's order, the YAML as typed, and while one
+ * has changes not saved the other shows the file as it was.
  */
-export function AutomationEditor({ name, onChanged }: { name: string; onChanged: () => void }) {
+export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
+  name: string;
+  tab: AutomationTab;
+  controls: HTMLElement | null;
+  inset: number;
+  onChanged: () => void;
+}) {
   const phone = usePhone();
   const [detail, setDetail] = useState<AutomationDetail | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [spec, setSpec] = useState<AutomationSpec>({ nodes: {} });
   const [text, setText] = useState('');
   const [dirty, setDirty] = useState<'graph' | 'yaml' | null>(null);
-  const [tab, setTab] = useState<Tab>('graph');
   const [selection, setSelection] = useState<Selection | null>(null);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<Record<string, AutomationNodeStatus> | undefined>();
@@ -235,108 +284,126 @@ export function AutomationEditor({ name, onChanged }: { name: string; onChanged:
     />
   );
 
-  return (
-    <Stack gap={0} h='100%'>
-      <Group gap='xs' px='md' py={8} justify='space-between' wrap='wrap' style={{ borderBottom: '1px solid var(--mantine-color-default-border)' }}>
-        <Group gap='xs' wrap='nowrap'>
-          <SegmentedControl
-            size='xs'
-            value={tab}
-            onChange={(next) => setTab(next as Tab)}
-            data={[{ value: 'graph', label: 'Graph' }, { value: 'yaml', label: 'YAML' }, { value: 'runs', label: 'Runs' }]}
-          />
-          {tab === 'graph' && editable && phone && <Palette onAdd={add} menu />}
-          {tab === 'graph' && editable && selection?.kind === 'wire' && (
-            <Button size='xs' variant='light' color='red' leftSection={<TablerIcon name='trash' size={14} />} onClick={removeSelected}>Remove the wire</Button>
-          )}
-        </Group>
-        <Group gap='xs' wrap='nowrap'>
-          {shownProblems.length > 0 && <Badge color='red' variant='light'>{shownProblems.length} {shownProblems.length === 1 ? 'problem' : 'problems'}</Badge>}
-          {!shownProblems.length && (
-            <Badge color={detail.running ? 'teal' : 'gray'} variant='light'>{detail.running ? 'running' : detail.enabled ? 'not running' : 'off'}</Badge>
-          )}
-          <Switch
-            size='sm'
-            label='On'
-            checked={detail.enabled}
-            disabled={!detail.writable}
-            onChange={(event) => void toggle(event.currentTarget.checked)}
-          />
-          {editable && (
-            <Button size='xs' loading={saving} disabled={!dirty} onClick={() => void save(dirty === 'graph' && problems.length > 0)}>
-              {dirty === 'graph' && problems.length > 0 ? 'Save as draft' : 'Save'}
-            </Button>
-          )}
-        </Group>
-      </Group>
+  const bar = (
+    <>
       {detail.module && (
-        <Alert color='gray' variant='light' radius={0} py={6}>
-          The {detail.module} module's, run as the administrator; it changes with the module. {detail.writable ? 'You may turn it on and off.' : ''}
-        </Alert>
+        <Tooltip
+          label={`The ${detail.module} module's, run as the administrator; it changes with the module.${detail.writable ? ' You may turn it on and off.' : ''}`}
+          multiline
+          w={260}
+        >
+          <Badge variant='light' color='gray' size='lg' style={{ flex: '0 0 auto' }}>{detail.module}</Badge>
+        </Tooltip>
       )}
-      {shownProblems.length > 0 && tab !== 'runs' && (
-        <Alert color='red' variant='light' radius={0} py={6}>
-          <Stack gap={2}>
-            {shownProblems.slice(0, 4).map((problem, index) => <Text key={index} size='sm'>{problem.node ? `${problem.node}: ` : ''}{problem.message}</Text>)}
-          </Stack>
-        </Alert>
-      )}
-      <Box style={{ flex: 1, minHeight: 0, display: 'flex' }}>
-        {tab === 'graph' && (
-          <>
-            {editable && !phone && <Palette onAdd={add} />}
-            <Box style={{ flex: 1, minWidth: 0, minHeight: 0 }}>
-              {dirty === 'yaml' ? <EmptyState title='The YAML has changes not saved'>Save them, or read the file again, to see the graph.</EmptyState> : (
-                <Canvas
-                  spec={spec}
-                  editable={editable}
-                  selection={selection}
-                  onSelect={setSelection}
-                  onChange={change}
-                  status={status}
-                  problems={problems}
-                  placeRef={place}
-                />
-              )}
-            </Box>
-            {form && !phone && (
-              <ScrollArea w={300} type='auto' style={{ flex: '0 0 300px', borderLeft: '1px solid var(--mantine-color-default-border)' }}>
-                <Box p='md'>{form}</Box>
-              </ScrollArea>
-            )}
-            {phone && (
-              <Drawer opened={Boolean(form)} onClose={() => setSelection(null)} position='bottom' size='85%' title='Node'>
-                {form}
-              </Drawer>
-            )}
-          </>
+      {shownProblems.length > 0
+        ? <Problems problems={shownProblems} phone={phone} onPick={tab === 'graph' ? (node) => spec.nodes[node] && setSelection({ kind: 'node', id: node }) : undefined} />
+        : (
+          <Badge color={detail.running ? 'teal' : 'gray'} variant='light' size='lg' style={{ flex: '0 0 auto' }}>
+            {detail.running ? 'running' : detail.enabled ? 'not running' : 'off'}
+          </Badge>
         )}
-        {tab === 'yaml' && (
-          <Box style={{ flex: 1, minWidth: 0 }} p='sm'>
-            {dirty === 'graph' ? <EmptyState title='The graph has changes not saved'>Save them to see them here as YAML, or read the file again.</EmptyState> : (
-              <CodeMirror
-                value={text}
-                language='yaml'
-                readOnly={!editable}
-                onChange={(next) => {
-                  setText(next);
-                  setDirty(next === detail.text ? null : 'yaml');
-                }}
-              />
-            )}
-          </Box>
-        )}
-        {tab === 'runs' && (
-          <Box style={{ flex: 1, minWidth: 0 }}>
-            {detail.writable ? <Runs path={runLog} /> : <EmptyState title='Not yours to read'>Only its owner and the administrator read what an automation did.</EmptyState>}
-          </Box>
-        )}
-      </Box>
+      <Switch
+        size='sm'
+        label={phone ? undefined : 'On'}
+        aria-label='On'
+        checked={detail.enabled}
+        disabled={!detail.writable}
+        onChange={(event) => void toggle(event.currentTarget.checked)}
+        styles={{ label: { color: 'white' } }}
+      />
       {dirty && (
-        <Group justify='flex-end' px='md' py={6} style={{ borderTop: '1px solid var(--mantine-color-default-border)' }}>
-          <Button size='xs' variant='subtle' color='gray' onClick={() => void load()}>Read the file again</Button>
-        </Group>
+        <Tooltip label='Read the file again'>
+          <ActionIcon variant='subtle' size={36} onClick={() => void load()} aria-label='Read the file again'>
+            <TablerIcon name='reload' size={20} />
+          </ActionIcon>
+        </Tooltip>
       )}
-    </Stack>
+      {editable && (
+        <Button size='xs' loading={saving} disabled={!dirty} onClick={() => void save(dirty === 'graph' && problems.length > 0)} style={{ flex: '0 0 auto' }}>
+          {dirty === 'graph' && problems.length > 0 ? 'Save as draft' : 'Save'}
+        </Button>
+      )}
+    </>
+  );
+
+  const formOpen = Boolean(form) && !phone;
+  const tools = tab === 'graph' && editable && (
+    <>
+      <Palette onAdd={add} phone={phone} />
+      {selection?.kind === 'wire' && (
+        <Tooltip label='Remove the wire' position='left'>
+          <ActionIcon variant='filled' color='red' size={36} onClick={removeSelected} aria-label='Remove the wire'>
+            <TablerIcon name='trash' size={18} />
+          </ActionIcon>
+        </Tooltip>
+      )}
+    </>
+  );
+
+  return (
+    <Box h='100%' style={{ position: 'relative' }}>
+      {controls && createPortal(bar, controls)}
+      {tab === 'graph' && (
+        dirty === 'yaml'
+          ? (
+            <Box h='100%' pl={inset}>
+              <EmptyState title='The YAML has changes not saved'>Save them, or read the file again, to see the graph.</EmptyState>
+            </Box>
+          )
+          : (
+            <>
+              <Canvas
+                spec={spec}
+                editable={editable}
+                selection={selection}
+                onSelect={setSelection}
+                onChange={change}
+                status={status}
+                problems={problems}
+                placeRef={place}
+                seed={`automation:${name}`}
+                insets={{ left: inset, right: formOpen ? FORM_WIDTH : 0 }}
+                tools={tools}
+              />
+              {formOpen && (
+                <Paper
+                  radius={0}
+                  shadow='md'
+                  style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: FORM_WIDTH, zIndex: 2, borderLeft: '1px solid var(--mantine-color-default-border)' }}
+                >
+                  <ScrollArea h='100%' type='auto'>
+                    <Box p='md'>{form}</Box>
+                  </ScrollArea>
+                </Paper>
+              )}
+              {phone && (
+                <Drawer opened={Boolean(form)} onClose={() => setSelection(null)} position='bottom' size='85%' title='Node'>
+                  {form}
+                </Drawer>
+              )}
+            </>
+          )
+      )}
+      {tab === 'yaml' && (
+        <Box h='100%' p='sm' pl={inset ? inset + 12 : undefined}>
+          {dirty === 'graph' ? <EmptyState title='The graph has changes not saved'>Save them to see them here as YAML, or read the file again.</EmptyState> : (
+            <CodeMirror
+              value={text}
+              language='yaml'
+              readOnly={!editable}
+              onChange={(next) => {
+                setText(next);
+                setDirty(next === detail.text ? null : 'yaml');
+              }}
+            />
+          )}
+        </Box>
+      )}
+      {tab === 'runs' && (
+        <Box h='100%' pl={inset}>
+          {detail.writable ? <Runs path={runLog} /> : <EmptyState title='Not yours to read'>Only its owner and the administrator read what an automation did.</EmptyState>}
+        </Box>
+      )}
+    </Box>
   );
 }

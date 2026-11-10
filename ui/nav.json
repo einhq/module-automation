@@ -2,11 +2,11 @@
   "sidebar": [
     {
       "id": "automation.automations",
-      "section": "browse",
+      "section": "system",
       "label": "Automations",
       "icon": "topology-star-3",
       "to": "/automations",
-      "order": 46,
+      "order": 25,
       "group": "automation"
     }
   ],

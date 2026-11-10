@@ -1,8 +1,8 @@
-import { TablerIcon } from '@ein/ui/components';
+import { HatGround, TablerIcon } from '@ein/ui/components';
 import { usePanZoom } from '@ein/ui/hooks';
 import { fitView } from '@ein/ui/lib';
 import { ActionIcon, Box, Stack, Text, Tooltip } from '@mantine/core';
-import { type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { AutomationNodeSpec, AutomationNodeStatus, AutomationProblem, AutomationSpec } from '../../lib/api.ts';
 import { KINDS } from '../../lib/automations/catalog.ts';
 import { connect, moveNode, outputsOf, takesInput, type Wire, wiresOf } from './graph-edit.ts';
@@ -20,6 +20,12 @@ type CanvasProps = {
   problems: AutomationProblem[];
   /** Asks the canvas where a new node goes: the middle of what is in view. */
   placeRef?: { current: (() => [number, number]) | null };
+  /** Picks where the tiling behind the drawing is cut, so each automation keeps its own. */
+  seed: string;
+  /** How much of the box's left and right edges is under panels: fitting and placing use the rest. */
+  insets?: { left: number; right: number };
+  /** Buttons of the page's, above the canvas's own in its corner. */
+  tools?: ReactNode;
 };
 
 /** How far a press moves before it is a drag rather than a click. */
@@ -44,7 +50,7 @@ const sameWire = (a: Wire, b: Wire) => a.from === b.from && a.output === b.outpu
  * Nodes may stand anywhere, below zero too: the drawing is the box round them and some room, and
  * when it grows to the left or up the view moves with it, so nothing on screen jumps.
  */
-export function Canvas({ spec, editable, selection, onSelect, onChange, status, problems, placeRef }: CanvasProps) {
+export function Canvas({ spec, editable, selection, onSelect, onChange, status, problems, placeRef, seed, insets = { left: 0, right: 0 }, tools }: CanvasProps) {
   const entries = Object.entries(spec.nodes);
   const bounds = useMemo(() => {
     if (!entries.length) return { x: -CANVAS_PAD, y: -CANVAS_PAD, width: CANVAS_PAD * 2 + NODE_WIDTH, height: CANVAS_PAD * 2 + 64 };
@@ -70,8 +76,9 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
 
   /** The nodes as large as fits, no larger than full size: the room round them is for dragging, not fitting. */
   const fitNodes = () => {
-    const fitted = fitView({ width: content.width - CANVAS_PAD * 2, height: content.height - CANVAS_PAD * 2 }, size, 0.25);
-    return { ...fitted, x: fitted.x - CANVAS_PAD * fitted.scale, y: fitted.y - CANVAS_PAD * fitted.scale };
+    const room = { width: Math.max(size.width - insets.left - insets.right, NODE_WIDTH), height: size.height };
+    const fitted = fitView({ width: content.width - CANVAS_PAD * 2, height: content.height - CANVAS_PAD * 2 }, room, 0.25);
+    return { ...fitted, x: fitted.x + insets.left - CANVAS_PAD * fitted.scale, y: fitted.y - CANVAS_PAD * fitted.scale };
   };
 
   // Placed once the box is measured: the whole graph.
@@ -93,7 +100,8 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
     placeRef.current = () => {
       const current = panZoom.current();
       if (!current || size.width === 0) return [snap(bounds.x + CANVAS_PAD), snap(bounds.y + CANVAS_PAD)];
-      return [snap((size.width / 2 - current.x) / current.scale + bounds.x - NODE_WIDTH / 2), snap((size.height / 2 - current.y) / current.scale + bounds.y - 32)];
+      const middle = insets.left + (size.width - insets.left - insets.right) / 2;
+      return [snap((middle - current.x) / current.scale + bounds.x - NODE_WIDTH / 2), snap((size.height / 2 - current.y) / current.scale + bounds.y - 32)];
     };
   }
 
@@ -166,11 +174,9 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
           userSelect: 'none',
           cursor: panZoom.dragging ? 'grabbing' : 'grab',
           background: 'var(--mrx-surface-base)',
-          backgroundImage: 'radial-gradient(var(--mantine-color-default-border) 1px, transparent 1px)',
-          backgroundSize: view ? `${20 * view.scale}px ${20 * view.scale}px` : '20px 20px',
-          backgroundPosition: view ? `${view.x}px ${view.y}px` : undefined,
         }}
       >
+        <HatGround width={size.width} height={size.height} seed={seed} />
         <Box
           style={{
             position: 'absolute',
@@ -303,7 +309,8 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
           })}
         </Box>
       </Box>
-      <Stack gap={8} style={{ position: 'absolute', top: 8, right: 8, zIndex: 1 }}>
+      <Stack gap={8} style={{ position: 'absolute', top: 8, right: 8 + insets.right, zIndex: 1 }}>
+        {tools}
         <Tooltip label='Fit the whole automation' position='left'>
           <ActionIcon variant='filled' color='dark' size={36} onClick={() => panZoom.animateTo(fitNodes(), true)} aria-label='Fit the whole automation'>
             <TablerIcon name='zoom-scan' size={18} />
