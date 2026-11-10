@@ -3,6 +3,7 @@
 import { assertEquals } from '@std/assert';
 import { parse } from '@std/yaml';
 import { EXAMPLES } from '../lib/automations/examples.ts';
+import { KINDS } from '../lib/automations/catalog.ts';
 import { readAutomation } from '../lib/automations/graph.ts';
 import { Simulation } from '../ui/automation/simulation.ts';
 
@@ -90,4 +91,34 @@ Deno.test('simulation: each output keeps what it last carried and when, for the 
   assertEquals(outputs.false, { value: false, at: new Date(START + MIN).toISOString() });
   assertEquals(outputs.out.value, false);
   assertEquals(sim.status().t.outputs?.out, { value: 21, at: new Date(START + MIN).toISOString() });
+});
+
+Deno.test('simulation: the motion light does not go on when it gets dark after the motion has ended', async () => {
+  const sim = simulationOf(example('motion-light'));
+  sim.prime(new Map([['hall-sensor/illuminance', { value: 80, at: START - MIN }]]), new Map());
+  sim.feed('hall-sensor/motion', true);
+  sim.feed('hall-sensor/motion', false);
+  sim.advance(6 * MIN);
+  sim.feed('hall-sensor/illuminance', 10);
+  await sim.settled();
+  assertEquals(said(sim, 'control'), ['would set hall-lamp/switch-0 to off'], 'no motion now, so no lamp');
+});
+
+Deno.test('simulation: the tour is shipped as the starting point is, off, with every kind of node, and its flows run', async () => {
+  const shipped = await Deno.readTextFile(new URL('../etc/automations.d/tour.yaml', import.meta.url));
+  assertEquals(shipped, example('tour'));
+  const raw = parse(shipped) as { enabled: boolean; nodes: Record<string, { type: string }> };
+  assertEquals(raw.enabled, false);
+  assertEquals([...new Set(Object.values(raw.nodes).map((node) => node.type))].sort(), Object.keys(KINDS).sort());
+
+  const sim = simulationOf(shipped);
+  sim.prime(new Map([['example-hall/illuminance', { value: 10, at: START - MIN }], ['example-house/away', { value: false, at: START - MIN }]]), new Map());
+  sim.feed('example-hall/motion', true);
+  sim.feed('example-bedroom/temperature', 26);
+  sim.feed('example-kitchen/temperature', 27);
+  sim.advance(10 * MIN);
+  await sim.settled();
+  assertEquals(said(sim, 'control'), ['would set example-hall-lamp/switch-0 to on']);
+  assertEquals(said(sim, 'link').length > 0, true, 'flow 4 shares the average');
+  assertEquals(said(sim, 'shell'), ['would run: echo "too warm, or a window open: $TOPIC said $VALUE" (VALUE=on)'], 'flow 5 hears it, warm ten minutes');
 });

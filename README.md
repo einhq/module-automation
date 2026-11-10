@@ -9,6 +9,8 @@ is sent to the device.
 
 Automations are nodes wired into a graph (inputs, logic, values, timers, actions), each a YAML
 file under `/etc/automations` run as its owner, and a module's under `/etc/automations.d/<module>`.
+This module's own is `automation/tour`, off: six small flows with every kind of node and invented
+devices, to simulate in the editor or start one of your own from (`automation-new <name> --from tour`).
 The `automation-engine` service runs them when a reading, a press, a device coming or going or the
 clock says so; the Automations page draws and edits them, and `automations`, `automation-new`,
 `automation-set` and `automation-check` do the same in the shell. The same service runs the
