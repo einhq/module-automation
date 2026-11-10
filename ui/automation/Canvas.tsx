@@ -1,6 +1,6 @@
 import { HatGround, TablerIcon } from '@ein/ui/components';
 import { usePanZoom } from '@ein/ui/hooks';
-import { fitView } from '@ein/ui/lib';
+import { fitView, formatTime } from '@ein/ui/lib';
 import { ActionIcon, Box, Stack, Text, Tooltip } from '@mantine/core';
 import { type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { AutomationNodeSpec, AutomationNodeStatus, AutomationProblem, AutomationSpec } from '../../lib/api.ts';
@@ -348,7 +348,7 @@ export function Canvas(
             return (
               <Box
                 key={`label:${wire.from}:${wire.output}:${wire.to}`}
-                title={`${wire.from} sent ${wireValue(sent.value)} to ${wire.to} at ${new Date(sent.at).toLocaleTimeString()}`}
+                title={`${wire.from} sent ${wireValue(sent.value)} to ${wire.to} at ${formatTime(sent.at)}`}
                 style={{
                   position: 'absolute',
                   left: middle.x,

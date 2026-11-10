@@ -1,5 +1,5 @@
 import { TablerIcon } from '@ein/ui/components';
-import { shq } from '@ein/ui/lib';
+import { formatDateTime, formatTime, shq } from '@ein/ui/lib';
 import { execCommand } from '@ein/ui/signals';
 import { ActionIcon, Badge, Box, Button, Group, ScrollArea, SegmentedControl, Stack, Text, TextInput, ThemeIcon, Tooltip } from '@mantine/core';
 import { useEffect, useState } from 'react';
@@ -23,8 +23,7 @@ const typed = (text: string): Value => {
 const shownValue = (value: Value | undefined): string =>
   value === undefined ? '–' : value === null ? 'nothing' : typeof value === 'boolean' ? value ? 'on' : 'off' : String(value);
 
-const clockText = (ms: number, seconds = true) =>
-  new Date(ms).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit', ...(seconds ? { second: '2-digit' } : {}) });
+const clockText = (ms: number, seconds = true) => formatDateTime(ms, { weekday: 'short', hour: '2-digit', minute: '2-digit', ...(seconds ? { second: '2-digit' } : {}) });
 
 const waitText = (ms: number) => ms < MINUTE ? `${Math.ceil(ms / 1000)} s` : ms < 3_600_000 ? `${Math.round(ms / MINUTE)} min` : `${Math.round(ms / 3_600_000)} h`;
 
@@ -32,7 +31,7 @@ const waitText = (ms: number) => ms < MINUTE ? `${Math.ceil(ms / 1000)} s` : ms 
 const ACTIONS = new Set<SimEntry['kind']>(['control', 'shell', 'link', 'debug', 'error']);
 
 /** The simulated time of an entry, to the second. */
-const timeText = (ms: number) => new Date(ms).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const timeText = (ms: number) => formatTime(ms, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
 /** An entry about no node of the graph: an endpoint fed, a link's name. */
 const ENTRY_ICONS: Record<SimEntry['kind'], string> = {
@@ -282,7 +281,7 @@ export function Simulator({ sim, onClose }: { sim: Simulation; onClose: () => vo
       )}
 
       <Group justify='space-between' wrap='nowrap'>
-        <Text size='sm' fw={600}>What happened</Text>
+        <Text size='sm' fw={600}>Log</Text>
         <SegmentedControl
           size='xs'
           value={only}

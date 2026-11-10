@@ -1,6 +1,6 @@
 import { CodeMirror, Dialog, DialogActions, EmptyState, PageLoader, TablerIcon } from '@ein/ui/components';
 import { useLogFollow, usePhone } from '@ein/ui/hooks';
-import { shq } from '@ein/ui/lib';
+import { formatDateTime, shq } from '@ein/ui/lib';
 import { execCommand, notify } from '@ein/ui/signals';
 import { ActionIcon, Badge, Box, Button, Drawer, Group, Loader, Menu, Paper, Popover, ScrollArea, Stack, Switch, Text, Tooltip, UnstyledButton } from '@mantine/core';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -139,7 +139,7 @@ function Runs({ path }: { path: string }) {
           }
           return (
             <Group key={index} gap='sm' wrap='nowrap' py={4} style={{ borderBottom: '1px solid var(--mantine-color-default-border)' }}>
-              <Text size='xs' c='dimmed' ff='monospace' w={150} style={{ flex: '0 0 150px' }}>{new Date(entry.createdAt).toLocaleString()}</Text>
+              <Text size='xs' c='dimmed' ff='monospace' w={150} style={{ flex: '0 0 150px' }}>{formatDateTime(entry.createdAt)}</Text>
               <Badge size='sm' variant='light' color={line.kind === 'error' ? 'red' : line.kind === 'action' ? 'teal' : 'gray'} style={{ flex: '0 0 auto' }}>
                 {line.kind ?? 'entry'}
               </Badge>
