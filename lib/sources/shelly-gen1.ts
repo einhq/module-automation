@@ -10,6 +10,7 @@
  *   shellies/<id>/relay/<n>/energy               the energy drawn since it last started, watt-minutes
  *   shellies/<id>/light/<n>                      a light, on or off (also color/<n> and white/<n>)
  *   shellies/<id>/light/<n>/status               its mode, brightness, colour and temperature, as JSON
+ *   shellies/<id>/light/<n>/power, …/energy      what a light draws, as for a relay
  *   shellies/<id>/roller/<n>                     a roller's state: open, close or stop
  *   shellies/<id>/roller/<n>/pos                 where it is, 0–100 %, or -1 when it does not know
  *   shellies/<id>/temperature                    its own temperature, °C
@@ -22,8 +23,10 @@
  * after it did needs, since a device announces only when it connects.
  *
  * The device is named by its id; an entity by what it is: `relay-0`, `relay-0-power`,
- * `relay-0-energy`, `light-0`, `light-0-brightness`, `color-0-color`, `roller-0-position`,
- * `roller-0-open`, `temperature`, `input-0`.
+ * `relay-0-energy`, `light-0`, `light-0-brightness`, `light-0-color`, `light-0-power`,
+ * `roller-0-position`, `roller-0-open`, `temperature`, `input-0`. A light is `light-<n>` whichever
+ * part it says itself under: a Color Bulb says its state under `color/0` and its power under
+ * `light/0`.
  */
 
 import { deviceName, type DeviceValue } from '@ein/api';
@@ -88,8 +91,36 @@ const LIGHTS = new Set(['light', 'color', 'white']);
 const brightnessField = (part: string, mode: unknown): 'gain' | 'brightness' =>
   mode === 'color' ? 'gain' : mode === 'white' ? 'brightness' : part === 'color' ? 'gain' : 'brightness';
 
+/** What a relay or a light measures under `<part>/<n>/power` and `…/energy`, named after it: `light-0-power`. */
+const meterReadings = (name: string, what: string): Found[] => {
+  if (what === 'power') {
+    return [{ entity: `${name}-power`, reading: { label: labelOf(`${name} power`), entityKind: 'sensor', unit: 'W', deviceClass: 'power', value: number } }];
+  }
+  if (what !== 'energy') return [];
+  return [{
+    entity: `${name}-energy`,
+    reading: {
+      label: labelOf(`${name} energy since start`),
+      entityKind: 'sensor',
+      unit: 'Wh',
+      deviceClass: 'energy',
+      value: (p) => {
+        const minutes = number(p);
+        return minutes === undefined ? undefined : Math.round(minutes / WATT_MINUTES_PER_WH * 100) / 100;
+      },
+    },
+  }];
+};
+
+/**
+ * Whether a `color` light has a white channel beside its red, green and blue: an RGBW2 does. A Color
+ * Bulb or a Duo RGBW (`shellycolorbulb-…`) takes `white` and says it back, but lights nothing more
+ * for it (ein/core#1173).
+ */
+const hasWhite = (id: string, part: string): boolean => part === 'color' && !id.startsWith('shellycolorbulb-');
+
 /** What a light's JSON status (`light/0/status`, `color/0/status`) holds, each with what it reads. */
-const lightReadings = (part: string, light: string): Found[] => [
+const lightReadings = (id: string, part: string, light: string): Found[] => [
   {
     entity: `${light}-brightness`,
     reading: {
@@ -119,7 +150,7 @@ const lightReadings = (part: string, light: string): Found[] => [
       },
     },
   },
-  ...(part === 'color'
+  ...(hasWhite(id, part)
     ? [{
       entity: `${light}-white`,
       reading: { label: labelOf(`${light} white`), entityKind: 'number' as const, min: 0, max: 255, step: 1, settable: true, value: field('white') },
@@ -132,37 +163,19 @@ const lightReadings = (part: string, light: string): Found[] => [
 ];
 
 /** What each topic under `shellies/<id>/` is, by its path there: `relay/0/power` → the relay's power. */
-const readingsOf = (rest: string[]): Found[] => {
+const readingsOf = (id: string, rest: string[]): Found[] => {
   if (rest[0] === 'relay' && /^\d+$/.test(rest[1] ?? '')) {
     const relay = `relay-${rest[1]}`;
     if (rest.length === 2) {
       return [{ entity: relay, reading: { label: labelOf(relay), entityKind: 'switch', deviceClass: 'outlet', settable: true, value: onOff } }];
     }
-    if (rest.length === 3 && rest[2] === 'power') {
-      return [{ entity: `${relay}-power`, reading: { label: labelOf(`${relay} power`), entityKind: 'sensor', unit: 'W', deviceClass: 'power', value: number } }];
-    }
-    if (rest.length === 3 && rest[2] === 'energy') {
-      return [{
-        entity: `${relay}-energy`,
-        reading: {
-          label: labelOf(`${relay} energy since start`),
-          entityKind: 'sensor',
-          unit: 'Wh',
-          deviceClass: 'energy',
-          value: (p) => {
-            const minutes = number(p);
-            return minutes === undefined ? undefined : Math.round(minutes / WATT_MINUTES_PER_WH * 100) / 100;
-          },
-        },
-      }];
-    }
-    return [];
+    return rest.length === 3 ? meterReadings(relay, rest[2]) : [];
   }
   if (LIGHTS.has(rest[0]) && /^\d+$/.test(rest[1] ?? '')) {
-    const light = `${rest[0]}-${rest[1]}`;
+    const light = `light-${rest[1]}`;
     if (rest.length === 2) return [{ entity: light, reading: { label: labelOf(light), entityKind: 'light', settable: true, value: onOff } }];
-    if (rest.length === 3 && rest[2] === 'status') return lightReadings(rest[0], light);
-    return [];
+    if (rest.length === 3 && rest[2] === 'status') return lightReadings(id, rest[0], light);
+    return rest.length === 3 ? meterReadings(light, rest[2]) : [];
   }
   if (rest[0] === 'roller' && /^\d+$/.test(rest[1] ?? '')) {
     const roller = `roller-${rest[1]}`;
@@ -202,8 +215,11 @@ const readingsOf = (rest: string[]): Found[] => {
   return [];
 };
 
-/** What to send for a command to one entity of the device with this id, by the entity's name. */
-const commandOf = (id: string, entity: string, value: string, mode: string | undefined): Publish | undefined => {
+/**
+ * What to send for a command to one entity of the device with this id, by the entity's name, to a
+ * light under the part it last said its state under, in the mode it last said it is in.
+ */
+const commandOf = (id: string, entity: string, value: string, light: Light | undefined): Publish | undefined => {
   const base = `shellies/${id}`;
   const relay = /^relay-(\d+)$/.exec(entity);
   if (relay) return value === 'on' || value === 'off' ? { topic: `${base}/relay/${relay[1]}/command`, payload: value } : undefined;
@@ -213,9 +229,11 @@ const commandOf = (id: string, entity: string, value: string, mode: string | und
     const position = number(value);
     return position === undefined ? undefined : { topic: `${base}/roller/${roller[1]}/command/pos`, payload: String(Math.round(position)) };
   }
-  const light = /^(light|color|white)-(\d+)(?:-(brightness|color|white|color-temperature))?$/.exec(entity);
-  if (!light) return undefined;
-  const [, part, index, what] = light;
+  const match = /^light-(\d+)(?:-(brightness|color|white|color-temperature))?$/.exec(entity);
+  if (!match) return undefined;
+  const [, index, what] = match;
+  const part = light?.part ?? 'light';
+  const mode = light?.mode;
   if (!what) return value === 'on' || value === 'off' ? { topic: `${base}/${part}/${index}/command`, payload: value } : undefined;
   // A light that says its mode is told it with each setting: a Duo RGBW ignores a setting of one
   // field alone. A colour is set in colour mode, a temperature in white.
@@ -232,6 +250,9 @@ const commandOf = (id: string, entity: string, value: string, mode: string | und
   if (what === 'brightness') return set({ [brightnessField(part, mode)]: amount });
   return set(what === 'white' ? { white: amount } : { mode: 'white', temp: amount });
 };
+
+/** The part a light last said its state under (`light`, `color`, `white`), and the mode it said it is in. */
+type Light = { part: string; mode?: string };
 
 /** The JSON object in a payload, or undefined. */
 const parse = (payload: string): Record<string, unknown> | undefined => {
@@ -250,8 +271,8 @@ export const createShellyGen1 = (): MqttSource => {
   const announced = new Set<string>();
   /** Entities announced, by `<device>/<entity>`. */
   const entities = new Set<string>();
-  /** The mode each light last said it is in (`color`, `white`), by `<id>/<light>`. */
-  const modes = new Map<string, string>();
+  /** What each light last said of itself, by `<id>/<n>`. */
+  const lights = new Map<string, Light>();
 
   /** The device of an id, made with what is known of it so far, and asked what it is if it has not said. */
   const deviceOf = (id: string, updates: Update[]): string => {
@@ -309,7 +330,7 @@ export const createShellyGen1 = (): MqttSource => {
         if (name !== device) continue;
         devices.delete(id);
         announced.delete(id);
-        for (const key of [...modes.keys()]) if (key.startsWith(`${id}/`)) modes.delete(key);
+        for (const key of [...lights.keys()]) if (key.startsWith(`${id}/`)) lights.delete(key);
       }
       for (const key of [...entities]) if (key.startsWith(`${device}/`)) entities.delete(key);
       return [];
@@ -349,10 +370,14 @@ export const createShellyGen1 = (): MqttSource => {
         if (!retained) updates.push({ kind: 'event', device, entity, value: PRESSES[event] ?? event.toLowerCase() });
         return updates;
       }
-      const readings = readingsOf(rest).map((found) => ({ ...found, value: found.reading.value?.(payload) }))
+      const readings = readingsOf(id, rest).map((found) => ({ ...found, value: found.reading.value?.(payload) }))
         .filter((found) => found.value !== undefined || !found.reading.value);
       if (!readings.some((found) => found.value !== undefined)) return [];
-      if (rest[2] === 'status' && typeof parse(payload)?.mode === 'string') modes.set(`${id}/${rest[0]}-${rest[1]}`, parse(payload)!.mode as string);
+      if (LIGHTS.has(rest[0]) && (rest.length === 2 || rest[2] === 'status')) {
+        const key = `${id}/${rest[1]}`;
+        const mode = rest.length === 3 ? parse(payload)?.mode : undefined;
+        lights.set(key, { part: rest[0], mode: typeof mode === 'string' ? mode : lights.get(key)?.mode });
+      }
       const updates: Update[] = [];
       const device = deviceOf(id, updates);
       for (const found of readings) {
@@ -367,8 +392,8 @@ export const createShellyGen1 = (): MqttSource => {
     },
     encode({ device, entity, value }) {
       const id = [...devices].find(([, name]) => name === device)?.[0];
-      const light = /^((?:light|color|white)-\d+)/.exec(entity)?.[1];
-      const publish = id ? commandOf(id, entity, value, light ? modes.get(`${id}/${light}`) : undefined) : undefined;
+      const index = /^light-(\d+)/.exec(entity)?.[1];
+      const publish = id ? commandOf(id, entity, value, index === undefined ? undefined : lights.get(`${id}/${index}`)) : undefined;
       return publish ? [publish] : undefined;
     },
   };
