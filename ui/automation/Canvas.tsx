@@ -6,7 +6,7 @@ import { type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useL
 import type { AutomationNodeSpec, AutomationNodeStatus, AutomationProblem, AutomationSpec } from '../../lib/api.ts';
 import { KINDS } from '../../lib/automations/catalog.ts';
 import { connect, moveNode, outputsOf, takesInput, type Wire, wiresOf } from './graph-edit.ts';
-import { CANVAS_PAD, inputY, NODE_WIDTH, nodeHeight, outputY, statusText, summaryOf, wirePath } from './node-view.ts';
+import { agoText, CANVAS_PAD, FRESH_MS, inputY, NODE_WIDTH, nodeHeight, outputY, statusText, summaryOf, wireMiddle, wirePath, wireValue } from './node-view.ts';
 
 export type Selection = { kind: 'node'; id: string } | { kind: 'wire'; wire: Wire };
 
@@ -233,6 +233,41 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
               );
             })()}
           </svg>
+          {status && wires.map((wire) => {
+            const sent = status[wire.from]?.outputs?.[wire.output];
+            if (!sent) return null;
+            const from = spec.nodes[wire.from];
+            const to = spec.nodes[wire.to];
+            const a = local(from);
+            const b = local(to);
+            const middle = wireMiddle(a.x + NODE_WIDTH, a.y + outputY(from, wire.output), b.x, b.y + inputY(to));
+            const fresh = (now ?? Date.now()) - Date.parse(sent.at) < FRESH_MS;
+            return (
+              <Box
+                key={`label:${wire.from}:${wire.output}:${wire.to}`}
+                title={`${wire.from} sent ${wireValue(sent.value)} to ${wire.to} at ${new Date(sent.at).toLocaleTimeString()}`}
+                style={{
+                  position: 'absolute',
+                  left: middle.x,
+                  top: middle.y,
+                  transform: 'translate(-50%, -50%)',
+                  pointerEvents: 'none',
+                  whiteSpace: 'nowrap',
+                  padding: '1px 7px',
+                  borderRadius: 999,
+                  fontSize: 11,
+                  lineHeight: '16px',
+                  border: `1px solid ${fresh ? 'var(--mantine-primary-color-filled)' : 'var(--mantine-color-default-border)'}`,
+                  background: fresh ? 'var(--mantine-primary-color-light)' : 'var(--mrx-surface-raised)',
+                  boxShadow: 'var(--mantine-shadow-xs)',
+                  transition: 'background 400ms, border-color 400ms',
+                }}
+              >
+                <Text span size='11px' fw={600} ff='monospace'>{wireValue(sent.value)}</Text>
+                <Text span size='11px' c='dimmed'>{` · ${agoText(sent.at, now)}`}</Text>
+              </Box>
+            );
+          })}
           {entries.map(([id, node]) => {
             const kind = KINDS[node.type];
             const color = kind?.color ?? 'gray';
@@ -273,7 +308,7 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
                     <Text size='sm' fw={600} truncate>{typeof node.label === 'string' && node.label ? node.label : id}</Text>
                   </Box>
                   <Text size='xs' c='dimmed' truncate mt={8}>{wrong.length ? wrong[0].message : summaryOf(node) || kind?.label}</Text>
-                  {said && <Text size='xs' c={status?.[id]?.problem ? 'red' : 'teal'} truncate>{status?.[id]?.problem ?? said}</Text>}
+                  {(status?.[id]?.problem || said) && <Text size='xs' c={status?.[id]?.problem ? 'red' : 'teal'} truncate>{status?.[id]?.problem ?? said}</Text>}
                 </Stack>
                 {kind?.input !== false && (
                   <Box

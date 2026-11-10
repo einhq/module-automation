@@ -102,6 +102,8 @@ type NodeState = {
   last?: Value;
   /** The latest value of each node wired in. */
   inputs: Map<string, Value>;
+  /** What it last sent on each output, and when. */
+  byOutput: Map<string, { value: Value; at: number }>;
   timers: Timer[];
   /** A clock's `every` slot, its `at`'s day. */
   slot?: number;
@@ -135,7 +137,7 @@ export class AutomationEngine {
   private lastTick?: number;
 
   constructor(readonly name: string, readonly automation: Automation, private readonly options: EngineOptions) {
-    for (const id of automation.nodes.keys()) this.states.set(id, { messages: 0, inputs: new Map(), timers: [] });
+    for (const id of automation.nodes.keys()) this.states.set(id, { messages: 0, inputs: new Map(), byOutput: new Map(), timers: [] });
   }
 
   /** What it reads and writes. */
@@ -220,6 +222,7 @@ export class AutomationEngine {
       return [id, {
         ...(state.value !== undefined ? { value: state.value } : {}),
         ...(state.at !== undefined ? { at: iso(state.at) } : {}),
+        ...(state.byOutput.size ? { outputs: Object.fromEntries([...state.byOutput].map(([output, sent]) => [output, { value: sent.value, at: iso(sent.at)! }])) } : {}),
         ...(due !== undefined ? { due: iso(due) } : {}),
         ...(state.problem ? { problem: state.problem } : {}),
         messages: state.messages,
@@ -349,6 +352,7 @@ export class AutomationEngine {
     const outputs = output !== undefined ? [output] : node.kind.boolean ? ['out', truthy(value) ? 'true' : 'false'] : ['out'];
     if (!this.quiet) this.options.trace?.({ node: node.id, value, outputs });
     for (const each of outputs) {
+      state.byOutput.set(each, { value, at: message.at });
       for (const target of node.wires[each] ?? []) this.deliver(target, node.id, next);
     }
   }

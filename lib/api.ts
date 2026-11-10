@@ -59,6 +59,8 @@ export type AutomationNodeStatus = {
   value?: AutomationValue;
   /** When. */
   at?: string;
+  /** What it last sent on each output, and when: a wire's last message. */
+  outputs?: Record<string, { value: AutomationValue; at: string }>;
   /** When it will send next by itself: a timer's end, a delay's, a held value's. */
   due?: string;
   /** Why it did not do what it should: an action that failed, a value it waits for. */

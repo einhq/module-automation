@@ -77,3 +77,17 @@ Deno.test('simulation: the log follows each node that sent, and says why one hel
   ]);
   assertEquals(said(sim, 'control'), [], 'too light for the lamp');
 });
+
+Deno.test('simulation: each output keeps what it last carried and when, for the label on its wire', () => {
+  const sim = simulationOf(
+    'nodes: {t: {type: device, endpoint: hall/temperature, to: [cold]}, cold: {type: compare, below: 19, to: {true: [log], false: [log]}}, log: {type: debug}}',
+  );
+  sim.feed('hall/temperature', 17);
+  sim.advance(MIN);
+  sim.feed('hall/temperature', 21);
+  const outputs = sim.status().cold.outputs!;
+  assertEquals(outputs.true, { value: true, at: new Date(START).toISOString() }, 'the true wire still says when it last carried true');
+  assertEquals(outputs.false, { value: false, at: new Date(START + MIN).toISOString() });
+  assertEquals(outputs.out.value, false);
+  assertEquals(sim.status().t.outputs?.out, { value: 21, at: new Date(START + MIN).toISOString() });
+});

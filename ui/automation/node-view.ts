@@ -24,6 +24,22 @@ export const outputY = (node: AutomationNodeSpec, output: string): number => {
 
 export const inputY = (node: AutomationNodeSpec): number => nodeHeight(node) / 2;
 
+/** The middle of `wirePath`'s curve: where a wire's label stands. */
+export const wireMiddle = (x1: number, y1: number, x2: number, y2: number): { x: number; y: number } => {
+  const dx = Math.max(40, Math.abs(x2 - x1) / 2);
+  // A cubic Bézier at t = ½: (P0 + 3·P1 + 3·P2 + P3) / 8.
+  return { x: (x1 + 3 * (x1 + dx) + 3 * (x2 - dx) + x2) / 8, y: (y1 + 3 * y1 + 3 * y2 + y2) / 8 };
+};
+
+/** How long a wire's label stays lit after a message went along it. */
+export const FRESH_MS = 3000;
+
+/** A message's value on a wire's label: text quoted and cut short, true, false and numbers as they are. */
+export const wireValue = (value: unknown): string => {
+  const text = typeof value === 'string' ? JSON.stringify(value) : value === null ? 'nothing' : String(value);
+  return text.length > 24 ? `${text.slice(0, 23)}…` : text;
+};
+
 /** A wire from one port to another, leaving and arriving level. */
 export const wirePath = (x1: number, y1: number, x2: number, y2: number): string => {
   const dx = Math.max(40, Math.abs(x2 - x1) / 2);
@@ -87,10 +103,11 @@ const until = (iso: string, now: number): string => {
   return seconds < 120 ? `in ${seconds} s` : `in ${Math.round(seconds / 60)} min`;
 };
 
-/** What a running node last did, in a few words: what it sent and when, or what it waits for, as of `now`. */
+/** What a running node waits for, in a few words, as of `now`: what it sent is on its wires. */
 export const statusText = (status: AutomationNodeStatus | undefined, now = Date.now()): string => {
-  if (!status) return '';
-  if (status.due) return `next ${until(status.due, now)}`;
-  if (status.value !== undefined) return `sent ${JSON.stringify(status.value)}${status.at ? `, ${ago(status.at, now)}` : ''}`;
-  return '';
+  if (!status?.due) return '';
+  return `next ${until(status.due, now)}`;
 };
+
+/** How long ago `at` was, as of `now`: a wire's label. */
+export const agoText = (at: string, now = Date.now()): string => ago(at, now);
