@@ -3,8 +3,8 @@
  * automation a member of the automation group writes runs on a press, as her and no more than she
  * may; it switches a plug by writing its control and runs a line with the value it was sent, never
  * as part of the line; an automation whose owner may not read what it reads, or that others may
- * change, is held back and says why; a timer runs on over a restart of the service and a move of
- * its node; a module's automation runs and only the administrator turns it off; and the commands
+ * change, is held back and says why; a file coming into a folder is sent once written, and only
+ * one its owner may read; a timer runs on over a restart of the service and a move of its node; a module's automation runs and only the administrator turns it off; and the commands
  * say all that.
  */
 
@@ -141,6 +141,36 @@ Deno.test({ name: 'automation engine', sanitizeResources: false, sanitizeOps: fa
       const log = await until('the run log', () => anna.execString('JSON_OUTPUT=0 log-read /var/logs/automations/nasty'), (text) => text.includes('"action"'));
       assert(log.includes('"node":"note"'));
       assertEquals((await bo.exec('log-read /var/logs/automations/nasty')).success, false, "the run log is its owner's");
+    });
+
+    await t.step('a file that comes into her folder is sent once written: one of another name, or one she may not read, is not', async () => {
+      await anna.execString('mkdir -p /home/anna/inbox /home/anna/documents');
+      await anna.execString('automation-new inbox --from inbox');
+      await anna.execString(`automation-set seen --yaml ${quoted('nodes: {seen: {type: file, folder: /home/anna/inbox, to: [shown]}, shown: {type: debug}}')}`);
+      await running('inbox');
+      await running('seen');
+      await admin.execString('echo secret > /home/hidden.pdf && chmod 600 /home/hidden.pdf && mv /home/hidden.pdf /home/anna/inbox/hidden.pdf');
+      await anna.execString('echo notes > /home/anna/inbox/notes.txt');
+      await anna.execString('echo scanned > /home/anna/inbox/scan.pdf');
+      const there = async (path: string) => (await admin.exec(`stat ${path}`)).success;
+      await until('scan.pdf filed', () => there('/home/anna/documents/scan.pdf'), Boolean);
+      assertEquals([await there('/home/anna/inbox/hidden.pdf'), await there('/home/anna/inbox/notes.txt')], [true, true]);
+      const seen = async () =>
+        (await anna.execString('JSON_OUTPUT=0 log-read /var/logs/automations/seen')).split('\n').filter((line) => line.includes('"debug"')).map((line) =>
+          JSON.parse(line.slice(line.indexOf('{'))).value
+        );
+      assertEquals(await until('seen', seen, (paths) => paths.includes('/home/anna/inbox/scan.pdf')), ['/home/anna/inbox/notes.txt', '/home/anna/inbox/scan.pdf']);
+      const status = await anna.execJson<AutomationRunStatus>('automation-status inbox');
+      assertEquals(status.nodes.scan.value, '/home/anna/inbox/scan.pdf');
+
+      await anna.execString('chmod 700 /home/anna/inbox');
+      await bo.execString(`automation-set bos-inbox --yaml ${quoted('nodes: {scan: {type: file, folder: /home/anna/inbox}}')}`);
+      const list = await until(
+        'held back',
+        () => bo.execJson<AutomationSummary[]>('automations'),
+        (list) => (list.find((each) => each.name === 'bos-inbox')?.problems.length ?? 0) > 0,
+      );
+      assertEquals(list.find((each) => each.name === 'bos-inbox')?.problems[0].message, 'its owner may not read the folder /home/anna/inbox, or there is none');
     });
 
     await t.step('a timer runs on over a restart of the service and a move of its node', async () => {

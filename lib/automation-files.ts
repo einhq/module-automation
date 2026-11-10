@@ -205,6 +205,12 @@ export const endpointState = async (vfs: NodeVFS, access: Access, endpoint: stri
   return value === undefined ? state : { ...state, value, at: last.at };
 };
 
+/** Whether `access` may read the folder at `path` and pass through it, as a file node watching it needs. */
+export const folderReadable = async (vfs: NodeVFS, access: Access, path: string): Promise<boolean> => {
+  const node = await vfs.get(access, path).catch(() => undefined);
+  return node !== undefined && verifyAccess(access, node.props, 'r') && verifyAccess(access, node.props, 'x');
+};
+
 /** Whether each device is online, as far as its driver said, read as `access`. */
 export const onlineOf = async (vfs: NodeVFS, access: Access, devices: string[]): Promise<Map<string, boolean>> => {
   const online = new Map<string, boolean>();

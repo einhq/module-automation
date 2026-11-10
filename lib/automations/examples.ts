@@ -75,16 +75,27 @@ nodes:
 `,
   },
   {
+    name: 'inbox',
+    label: 'A file in a folder',
+    description: 'Each PDF that comes into a folder is moved on to another',
+    yaml: `description: Each PDF scanned into the inbox is moved to the documents folder
+nodes:
+  scan: {type: file, folder: /home/anna/inbox, match: '*.pdf', pos: [0, 0], to: [file-it]}
+  file-it: {type: shell, run: 'mv "$VALUE" /home/anna/documents/ && echo "filed $VALUE"', pos: [260, 0], to: [shown]}
+  shown: {type: debug, pos: [520, 0]}
+`,
+  },
+  {
     name: 'tour',
     label: 'Tour of every node',
-    description: 'Six small flows, every kind of node among them, with invented devices: to simulate, read and copy from',
+    description: 'Seven small flows, every kind of node among them, with invented devices: to simulate, read and copy from',
     // The same text as etc/automations.d/tour.yaml, the module's own automation/tour: a test keeps them one.
-    yaml: `# A tour of automations: six small flows, every kind of node among them. Its devices are invented
+    yaml: `# A tour of automations: seven small flows, every kind of node among them. Its devices are invented
 # (example-…), so it switches nothing real. Open it under System → Automations and simulate it with
 # the flask, feeding it readings and presses by hand; or make one of your own from it (New, starting
 # point Tour; or automation-new <name> --from tour) and set your own devices. It comes off, and is
 # best left so.
-description: A tour of every kind of node in six small flows; its devices are invented, so simulate it or copy it
+description: A tour of every kind of node in seven small flows; its devices are invented, so simulate it or copy it
 enabled: false
 nodes:
   # 1. Motion light. The hall lamp on at motion while it is dark and someone is home, off five
@@ -155,6 +166,11 @@ nodes:
   dated: { type: debug, pos: [600, 2160] }
   router: { type: online, device: example-router, pos: [0, 2280], to: [router-there] }
   router-there: { type: debug, pos: [300, 2280] }
+
+  # 7. A file. The path of each PDF that comes into a folder, made there or moved in, once it is
+  #    written in full; another kind of file is held back. file.
+  scans: { type: file, label: Scans, folder: /home/example/inbox, match: '*.pdf', pos: [0, 2440], to: [scanned] }
+  scanned: { type: debug, pos: [300, 2440] }
 `,
   },
 ];

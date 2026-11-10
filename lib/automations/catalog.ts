@@ -13,6 +13,8 @@ type SettingType =
   | 'endpoint'
   /** A device's name. */
   | 'device'
+  /** A folder's path, `/home/anna/inbox`. */
+  | 'folder'
   /** `30s`, `5m`, `1.5h`, `1d`. */
   | 'duration'
   | 'number'
@@ -155,6 +157,23 @@ const kinds: KindSpec[] = [
     input: false,
     outputs: OUT,
     settings: [{ name: 'name', type: 'text', label: 'Link name', required: true, help: "The same as a link out's, in any of its owner's automations" }],
+  },
+  {
+    type: 'file',
+    group: 'input',
+    label: 'File',
+    color: 'orange',
+    about:
+      "Sends the path of each file that comes into **Folder**, made there or moved in, once it has been written in full and two seconds have passed with nothing more written to it; with **Changed files too**, also each time a file in it is written again. Only the files directly in the folder, and only those whose names match **Names** when it is set (`*` any text, `?` one character, upper or lower case alike). The automation's owner must be allowed to read the folder, and hears only of the files they may read. A file that comes while the automation is off, or the service stopped, is not sent later.",
+    icon: 'file-arrow-right',
+    description: 'A file that comes into a folder',
+    input: false,
+    outputs: OUT,
+    settings: [
+      { name: 'folder', type: 'folder', label: 'Folder', required: true, help: '/home/anna/inbox: the files directly in it' },
+      { name: 'match', type: 'text', label: 'Names', help: '*.pdf, scan-*: every file unless set' },
+      { name: 'changes', type: 'flag', label: 'Changed files too', help: 'Send a file again each time it is written' },
+    ],
   },
   {
     type: 'compare',

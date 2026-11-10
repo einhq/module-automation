@@ -2,8 +2,8 @@
 /**
  * automation-check — what is wrong with an automation, and what each of its nodes would say now:
  * the latest readings the caller may read sent through it, no action run. An endpoint the caller
- * may not read, or a control they may not write, is a problem, as it is for the engine when the
- * caller owns it.
+ * may not read, a control they may not write, or a folder they may not read is a problem, as it is
+ * for the engine when the caller owns it.
  *
  *   automation-check hall-light
  *   automation-check --yaml "$text"     a draft, before it is written
@@ -13,7 +13,7 @@ import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import type { AutomationCheck, AutomationProblem, AutomationValue } from '@automation/api';
 import { problemLines, readAs, resolveAutomation } from '@automation/automation-commands';
-import { endpointState, localTime, onlineOf, parseAutomationText } from '@automation/automation-files';
+import { endpointState, folderReadable, localTime, onlineOf, parseAutomationText } from '@automation/automation-files';
 import { AutomationEngine, readsOf } from '@automation/automations/engine';
 
 const automationCheck = async (cmd: Command): CmdReturn => {
@@ -35,7 +35,10 @@ const automationCheck = async (cmd: Command): CmdReturn => {
     }
     const check: AutomationCheck = { ...(name ? { name } : {}), problems, nodes: {}, endpoints: [] };
     if (read.automation) {
-      const { endpoints, controls, devices } = readsOf(read.automation);
+      const { endpoints, controls, devices, folders } = readsOf(read.automation);
+      for (const folder of folders) {
+        if (!(await folderReadable(cmd.sys.vfs, cmd.access, folder))) problems.push({ message: `you may not read the folder ${folder}, or there is none` });
+      }
       const values = new Map<string, { value: AutomationValue; at: number }>();
       for (const endpoint of new Set([...endpoints, ...controls])) {
         const state = await endpointState(cmd.sys.vfs, cmd.access, endpoint);

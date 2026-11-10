@@ -2,7 +2,7 @@
  * One automation running: messages flow from its inputs along its wires, each node doing what its
  * kind says, and its actions are handed to `act` one after another.
  *
- * A message is a value, where it came from (`topic`: an endpoint, `clock`, `button`) and when. Every
+ * A message is a value, where it came from (`topic`: an endpoint, a folder, `clock`, `button`) and when. Every
  * node has one input; `and`, `or`, `math` and `aggregate` keep the latest value of each node wired
  * into them. A node that says true or false (compare, and, or, not, timer, held, between, online)
  * sends only when that changes, unless its `every` is set.
@@ -19,12 +19,12 @@
 import type { AutomationNodeStatus, AutomationValue as Value } from '../api.ts';
 import type { Automation, Node } from './graph.ts';
 import { evaluate, type Expression, NoValueYet } from './math.ts';
-import { type Aggregate, aggregate, passes, same, type Test, truthy, valueOfText, valueText } from './values.ts';
+import { type Aggregate, aggregate, nameMatches, passes, same, type Test, truthy, valueOfText, valueText } from './values.ts';
 import { nameOfSender } from './graph.ts';
 
 export type Message = {
   value: Value;
-  /** Where it came from: `<device>/<endpoint>`, `clock`, `button`, a link's name. */
+  /** Where it came from: `<device>/<endpoint>`, a file's folder, `clock`, `button`, a link's name. */
   topic: string;
   /** When, in ms: a reading's own time, not when it was heard. */
   at: number;
@@ -42,6 +42,18 @@ export type DeviceEvent = {
   value?: Value;
   online?: boolean;
   event?: boolean;
+  /** Ms. */
+  at: number;
+};
+
+/** A file in a folder a file node watches: one that came (made there or moved in), was written, or is gone. */
+export type FileEvent = {
+  /** The folder, as its file nodes name it. */
+  folder: string;
+  path: string;
+  change: 'came' | 'written' | 'gone';
+  /** It came with nothing in it yet, and is sent once it is written. */
+  empty?: boolean;
   /** Ms. */
   at: number;
 };
@@ -90,6 +102,10 @@ type EngineOptions = {
 /** The most nodes a message passes: past it, a message goes round, through links, and is dropped. */
 const MAX_HOPS = 64;
 const SHELL_TIMEOUT_MS = 30_000;
+/** How long a file must go unwritten before a file node sends it: a file written in pieces is sent once, whole. */
+export const FILE_SETTLE_MS = 2000;
+/** The most files a file node waits on to be written: past it, the longest waiting is forgotten. */
+const MAX_WAITING_FILES = 1000;
 
 type Timer = { due: number; cancel: () => void; message?: Message };
 
@@ -119,12 +135,15 @@ const inWindow = (local: LocalTime, from: number, to: number, days?: number[]): 
   return from <= to ? local.minute >= from && local.minute < to : local.minute >= from || local.minute < to;
 };
 
-/** What an automation reads: the endpoints its device nodes listen to and its controls write, the devices whose coming and going it follows. */
-type Reads = { endpoints: string[]; controls: string[]; devices: string[] };
+/**
+ * What an automation reads: the endpoints its device nodes listen to and its controls write, the
+ * devices whose coming and going it follows, the folders its file nodes watch.
+ */
+type Reads = { endpoints: string[]; controls: string[]; devices: string[]; folders: string[] };
 
 export const readsOf = (automation: Automation): Reads => {
   const of = (type: string, key: string) => [...new Set([...automation.nodes.values()].filter((node) => node.type === type).map((node) => node.config[key] as string))];
-  return { endpoints: of('device', 'endpoint'), controls: of('control', 'endpoint'), devices: of('online', 'device') };
+  return { endpoints: of('device', 'endpoint'), controls: of('control', 'endpoint'), devices: of('online', 'device'), folders: of('file', 'folder') };
 };
 
 export class AutomationEngine {
@@ -135,6 +154,10 @@ export class AutomationEngine {
   private stopped = false;
   private actions: Promise<void> = Promise.resolve();
   private lastTick?: number;
+  /** The files a file node will send once nothing more is written to them, by `<node>\n<path>`: how to call each off. */
+  private readonly settling = new Map<string, () => void>();
+  /** The files that came empty, by `<node>\n<path>`, sent once they are written. */
+  private readonly waiting = new Set<string>();
 
   constructor(readonly name: string, readonly automation: Automation, private readonly options: EngineOptions) {
     for (const id of automation.nodes.keys()) this.states.set(id, { messages: 0, inputs: new Map(), byOutput: new Map(), timers: [] });
@@ -196,6 +219,43 @@ export class AutomationEngine {
       this.send(node, { value: hhmm(local.minute), topic: 'clock', at: now, hops: 0 }, hhmm(local.minute));
     }
     this.tickBetween(local);
+  }
+
+  /**
+   * A file in a folder: each file node watching it sends its path once nothing more has been
+   * written to it for `FILE_SETTLE_MS`. A file that came empty waits until it is written; one that
+   * is gone before then is not sent.
+   */
+  file(event: FileEvent): void {
+    if (this.stopped) return;
+    const name = event.path.slice(event.path.lastIndexOf('/') + 1);
+    for (const node of this.automation.nodes.values()) {
+      if (node.type !== 'file' || node.config.folder !== event.folder) continue;
+      const key = `${node.id}\n${event.path}`;
+      const known = this.settling.has(key) || this.waiting.has(key);
+      this.settling.get(key)?.();
+      this.settling.delete(key);
+      this.waiting.delete(key);
+      if (event.change === 'gone') continue;
+      const match = node.config.match as string | undefined;
+      if (match !== undefined && !nameMatches(match, name)) {
+        this.options.trace?.({ node: node.id, value: event.path, skipped: `only names that match ${match} are passed on` });
+        continue;
+      }
+      if (event.change === 'written' && !known && !node.config.changes) continue;
+      if (event.change === 'came' && event.empty) {
+        this.waiting.add(key);
+        if (this.waiting.size > MAX_WAITING_FILES) this.waiting.delete(this.waiting.values().next().value!);
+        continue;
+      }
+      this.settling.set(
+        key,
+        this.options.schedule(() => {
+          this.settling.delete(key);
+          if (!this.stopped) this.send(node, { value: event.path, topic: event.folder, at: this.options.now(), event: true, hops: 0 }, event.path);
+        }, FILE_SETTLE_MS),
+      );
+    }
   }
 
   /** A button node pressed. */
@@ -278,6 +338,9 @@ export class AutomationEngine {
   /** Stop: no timer fires and no action starts after this. */
   stop(): void {
     this.stopped = true;
+    for (const cancel of this.settling.values()) cancel();
+    this.settling.clear();
+    this.waiting.clear();
     for (const state of this.states.values()) {
       for (const timer of state.timers) timer.cancel();
       state.timers = [];

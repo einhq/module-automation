@@ -58,6 +58,8 @@ export const summaryOf = (node: AutomationNodeSpec): string => {
       return `${text(node.endpoint)}${has('is') ? ` = ${text(node.is)}` : ''}`;
     case 'online':
       return text(node.device);
+    case 'file':
+      return `${text(node.folder)}${has('match') ? `/${text(node.match)}` : ''}${node.changes === true ? ', changed too' : ''}`;
     case 'clock':
       return has('every') ? `every ${text(node.every)}` : `${text(node.at)}${has('days') ? ` ${days(node.days)}` : ''}`;
     case 'between':

@@ -121,4 +121,13 @@ Deno.test('simulation: the tour is shipped as the starting point is, off, with e
   assertEquals(said(sim, 'control'), ['would set example-hall-lamp/switch-0 to on']);
   assertEquals(said(sim, 'link').length > 0, true, 'flow 4 shares the average');
   assertEquals(said(sim, 'shell'), ['would run: echo "too warm, or a window open: $TOPIC said $VALUE" (VALUE=on)'], 'flow 5 hears it, warm ten minutes');
+
+  sim.addFile('scans', 'letter.pdf');
+  sim.addFile('scans', 'notes.txt');
+  sim.advance(5000);
+  assertEquals(
+    said(sim, 'debug').filter((text) => text.includes('inbox')),
+    ['"/home/example/inbox/letter.pdf" from /home/example/inbox'],
+    'flow 7 passes a PDF on, and nothing else',
+  );
 });

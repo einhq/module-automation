@@ -19,7 +19,7 @@ AUTOMATIONS: what the house does by itself — "turn on the hall lamp when there
 
 The YAML: `description:` a sentence, and `nodes:` by id, each `{type: <kind>, <settings>, to: [<ids>]}`; a node that says true or false also sends on `true` and `false` alone: `to: {true: [lamp-on], false: [lamp-off]}`. The kinds:
 
-- device {endpoint: <device>/<endpoint>, is?: single} — readings or presses; online {device}; clock {at: '06:30', days?: weekdays} or {every: 15m}; between {from: '22:00', until: '06:30'}; button.
+- device {endpoint: <device>/<endpoint>, is?: single} — readings or presses; online {device}; clock {at: '06:30', days?: weekdays} or {every: 15m}; between {from: '22:00', until: '06:30'}; button; file {folder: /home/<user>/inbox, match?: '*.pdf'} — the path of each file that comes into the folder, once written.
 - compare {is|not|above|below}; and; or; not (each true or false, sent when it changes); switch {cases: {cold: {below: 18}}} sends on each case or else.
 - math {expression: 'round(value * 1.8 + 32, 1)'}; aggregate {fn: avg|min|max|sum|count|any|all|last} over what is wired in; set {value}.
 - delay {for: 30s}; timer {off-after: 5m} (true at once, false that long after the input went false or the last press); held {for: 10m} (true once true that long); debounce {for}; throttle {for}.

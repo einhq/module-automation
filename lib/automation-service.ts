@@ -5,8 +5,9 @@
  *
  * Each runs with its owner's rights: it hears only the endpoints its owner may read, is primed
  * with the latest readings as its owner reads them, writes controls through the VFS as its owner,
- * and runs shell lines through `runas` as its owner. Those rights are checked when it is read and
- * every minute after; one that lost them is held back, saying why.
+ * and runs shell lines through `runas` as its owner. Its file nodes watch their folders through a
+ * VFS subscription as its owner, which passes on only the files the owner may read. Those rights
+ * are checked when it is read and every minute after; one that lost them is held back, saying why.
  *
  * A file whose change does not change how it runs (a node moved, a label) keeps its engine and
  * timers. A changed one starts afresh, primed, and takes over the deadlines its nodes waited for;
@@ -22,10 +23,22 @@
  */
 
 import type { DeviceMessage } from '@ein/api';
-import { type Access, accessOfUser, ADMIN_ACCESS, type Command, type ResourceHandleIf, shq } from '@ein/client';
+import { type Access, accessOfUser, ADMIN_ACCESS, type Command, type NodeEvent, type ResourceHandleIf, shq } from '@ein/client';
 import type { AutomationProblem, AutomationValue } from './api.ts';
-import { accounts, type AutomationFile, endpointState, localTime, onlineOf, readAutomationFiles, readText, runLogPath, statePath, writeText } from './automation-files.ts';
-import { type Action, AutomationEngine, type Deadline, type DeviceEvent, type LogEntry, type Message, readsOf } from './automations/engine.ts';
+import {
+  accounts,
+  type AutomationFile,
+  endpointState,
+  folderReadable,
+  localTime,
+  onlineOf,
+  readAutomationFiles,
+  readText,
+  runLogPath,
+  statePath,
+  writeText,
+} from './automation-files.ts';
+import { type Action, AutomationEngine, type Deadline, type DeviceEvent, type FileEvent, type LogEntry, type Message, readsOf } from './automations/engine.ts';
 import { fingerprint } from './automations/graph.ts';
 import { valueOfText } from './automations/values.ts';
 import { AUTOMATIONS_DIR, AUTOMATIONS_KEYS, AUTOMATIONS_QUEUE, MODULE_AUTOMATIONS_DIR, MODULE_RUN_LOGS_DIR, MODULE_STATE_DIR, RUN_LOGS_DIR, STATE_DIR } from './paths.ts';
@@ -64,6 +77,8 @@ type Run = {
   hears: Set<string>;
   /** The deadlines last written to its state file. */
   saved: string;
+  /** Its file nodes' folders, watched as its owner. */
+  watches: { unsubscribe(): Promise<void> }[];
 };
 
 const parent = (path: string) => path.slice(0, path.lastIndexOf('/')) || '/';
@@ -79,6 +94,26 @@ const eventOf = (data: unknown): (DeviceEvent & { retained?: boolean }) | undefi
   if (record.endpoint === undefined) return typeof record.online === 'boolean' ? { device: record.device, online: record.online, at, ...retained } : undefined;
   if (typeof record.endpoint !== 'string' || record.value === undefined) return undefined;
   return { device: record.device, endpoint: record.endpoint, value: record.value, ...(record.event ? { event: true } : {}), at, ...retained };
+};
+
+/** What a file node makes of a change under its folder: a file made or moved there, written, gone. */
+const fileEventsOf = (folder: string, event: NodeEvent): FileEvent[] => {
+  const at = event.timestamp;
+  switch (event.type) {
+    case 'created':
+      return [{ folder, path: event.path, change: 'came', ...(Number(event.node.attrs.size) > 0 ? {} : { empty: true }), at }];
+    case 'moved': {
+      // Renamed within the folder, as a scanner does with the file it wrote under a name of its own.
+      const from: FileEvent[] = event.fromPath && parent(event.fromPath) === folder ? [{ folder, path: event.fromPath, change: 'gone', at }] : [];
+      return [...from, { folder, path: event.path, change: 'came', at }];
+    }
+    case 'updated':
+      return event.node.attrs.writtenAt !== event.previousNode?.attrs.writtenAt ? [{ folder, path: event.path, change: 'written', at }] : [];
+    case 'deleted':
+      return [{ folder, path: event.path, change: 'gone', at }];
+    default:
+      return [];
+  }
 };
 
 export const runAutomationService = async ({ cmd, stopped, automationGid }: ServiceOptions): Promise<void> => {
@@ -151,7 +186,7 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
 
   /** The run's rights over what it reads and writes, or why it may not run. */
   const rights = async (file: AutomationFile, access: Access): Promise<AutomationProblem[]> => {
-    const { endpoints, controls, devices } = readsOf(file.automation!);
+    const { endpoints, controls, devices, folders } = readsOf(file.automation!);
     const problems: AutomationProblem[] = [];
     for (const endpoint of endpoints) {
       if (!(await endpointState(vfs, access, endpoint)).readable) problems.push({ message: `its owner may not read ${endpoint}, or there is no such endpoint` });
@@ -161,6 +196,9 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
     }
     for (const device of devices) {
       if (!(await vfs.get(access, `/dev/${device}`).catch(() => undefined))) problems.push({ message: `its owner may not see the device ${device}, or there is none` });
+    }
+    for (const folder of folders) {
+      if (!(await folderReadable(vfs, access, folder))) problems.push({ message: `its owner may not read the folder ${folder}, or there is none` });
     }
     return problems;
   };
@@ -187,13 +225,14 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
   const stopRun = async (name: string, forget = false) => {
     const run = runs.get(name);
     run?.engine.stop();
+    for (const watch of run?.watches ?? []) await watch.unsubscribe().catch(() => {});
     runs.delete(name);
     if (run && forget) await vfs.unlink(ADMIN_ACCESS, statePath(name), parent(statePath(name))).catch(() => {});
   };
 
   /** Start an automation: primed as its owner, with the deadlines it waited for. */
   const start = async (file: AutomationFile, owner: string, access: Access, key: string, deadlines: Deadline[]): Promise<Run> => {
-    const run = { file, owner, access, key, hears: new Set<string>(), saved: '' } as Run;
+    const run = { file, owner, access, key, hears: new Set<string>(), saved: '', watches: [] as Run['watches'] } as Run;
     run.engine = new AutomationEngine(file.name, file.automation!, {
       schedule: (fn, ms) => {
         const timer = setTimeout(fn, ms);
@@ -207,7 +246,7 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
       },
       log: (entry) => void runLog(run, entry),
     });
-    const { endpoints, controls, devices } = run.engine.reads();
+    const { endpoints, controls, devices, folders } = run.engine.reads();
     run.hears = new Set([...endpoints, ...controls, ...devices]);
     const values = new Map<string, { value: AutomationValue; at: number }>();
     for (const endpoint of new Set([...endpoints, ...controls])) {
@@ -217,6 +256,13 @@ export const runAutomationService = async ({ cmd, stopped, automationGid }: Serv
     run.engine.prime({ values, online: await onlineOf(vfs, access, devices) });
     run.engine.restore(deadlines, STALE_MS);
     run.saved = JSON.stringify(deadlines);
+    // As the run's owner, read again each event: the VFS passes on only what they may read now.
+    for (const folder of folders) {
+      const watch = await vfs.subscribe?.(() => run.access, (event) => {
+        for (const each of fileEventsOf(folder, event)) run.engine.file(each);
+      }, { pathPrefix: folder, recursive: false, nodeTypes: ['file'], eventTypes: ['created', 'updated', 'moved', 'deleted'] });
+      if (watch) run.watches.push(watch);
+    }
     return run;
   };
 

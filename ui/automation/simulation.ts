@@ -3,7 +3,7 @@
  * own, with nothing real behind it. A control it writes is said and the simulated device takes the
  * value, as a real one would report it back; a command line is said, not run, and sends on an empty value;
  * a link out is said, and reaches the automation's own links in. Readings, presses, a device coming
- * or going and a link's message are fed in by hand; the clock runs on from where it is told to,
+ * or going, a file coming into a folder and a link's message are fed in by hand; the clock runs on from where it is told to,
  * and timers, clocks and between nodes go off as it passes them.
  *
  * Pure but for `Intl`, so the editor runs it in the browser and the tests on Deno.
@@ -114,6 +114,17 @@ export class Simulation {
     this.echoes = 0;
     this.add(node, 'input', 'pressed by hand');
     this.engine.press(node);
+    this.changed();
+  }
+
+  /** A file named `name` come into the folder of file node `id`, written in full: sent once it has been still a moment. */
+  addFile(id: string, name: string): void {
+    const folder = this.automation.nodes.get(id)?.config.folder as string | undefined;
+    if (folder === undefined) return;
+    const path = `${folder === '/' ? '' : folder}/${name}`;
+    this.echoes = 0;
+    this.add(id, 'input', `a file came: ${path}`);
+    this.engine.file({ folder, path, change: 'came', at: this.now });
     this.changed();
   }
 

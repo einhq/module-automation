@@ -107,3 +107,9 @@ export const aggregate = (fn: Aggregate, values: Value[]): Value | undefined => 
 
 /** A computed number to the precision its readings have, not a float's noise: 21.450000000000003 is 21.45. */
 export const round = (n: number): number => Number(n.toPrecision(12));
+
+/** Whether a file's `name` matches `pattern`, where `*` is any text and `?` one character, upper or lower case alike. */
+export const nameMatches = (pattern: string, name: string): boolean => {
+  const source = [...pattern].map((char) => char === '*' ? '.*' : char === '?' ? '.' : char.replace(/[.+^${}()|[\]\\]/g, '\\$&')).join('');
+  return new RegExp(`^${source}$`, 'iu').test(name);
+};

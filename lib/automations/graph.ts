@@ -106,6 +106,13 @@ const readSetting = (spec: SettingSpec, value: unknown): Setting => {
       if (parts.length !== 2 || !parts[0] || !parts[1]) throw new Error(`takes <device>/<endpoint>, not ${JSON.stringify(value)}`);
       return value as string;
     }
+    case 'folder': {
+      const path = typeof value === 'string' ? value.trim().replace(/(?<=.)\/+$/, '') : '';
+      if (!path.startsWith('/') || path.split('/').some((part, index) => index > 0 && ['', '.', '..'].includes(part))) {
+        throw new Error(`takes a folder's whole path, such as /home/anna/inbox, not ${JSON.stringify(value)}`);
+      }
+      return path;
+    }
     case 'device':
     case 'text':
     case 'line':

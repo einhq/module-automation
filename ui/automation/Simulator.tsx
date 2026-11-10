@@ -169,6 +169,9 @@ function InputRow({ sim, node }: { sim: Simulation; node: Node }) {
     case 'link-in':
       feed = <ValueFeed placeholder='what the link sends' onSend={(value) => sim.sendLink(node.config.name as string, value)} />;
       break;
+    case 'file':
+      feed = <ValueFeed placeholder='scan.pdf' onSend={(value) => sim.addFile(node.id, String(value))} />;
+      break;
     case 'between':
       now = sim.status()[node.id]?.value === true ? 'inside' : 'outside';
       break;
@@ -182,7 +185,9 @@ function InputRow({ sim, node }: { sim: Simulation; node: Node }) {
           </ThemeIcon>
           <Box style={{ minWidth: 0 }}>
             <Text size='sm' fw={600} truncate>{node.id}</Text>
-            <Text size='xs' c='dimmed' truncate>{endpoint ?? device ?? (node.config.name as string | undefined) ?? kind?.label}</Text>
+            <Text size='xs' c='dimmed' truncate>
+              {endpoint ?? device ?? (node.config.name as string | undefined) ?? (node.config.folder as string | undefined) ?? kind?.label}
+            </Text>
           </Box>
         </Group>
         {now !== undefined && <Text size='sm' ff='monospace'>{now}</Text>}
@@ -213,7 +218,7 @@ export function Simulator({ sim, onClose }: { sim: Simulation; onClose: () => vo
     return () => clearInterval(timer);
   }, [sim, running]);
 
-  const inputs = [...sim.automation.nodes.values()].filter((node) => ['device', 'online', 'clock', 'button', 'link-in', 'between'].includes(node.type));
+  const inputs = [...sim.automation.nodes.values()].filter((node) => ['device', 'online', 'clock', 'button', 'link-in', 'file', 'between'].includes(node.type));
   const controls = [...new Set([...sim.automation.nodes.values()].filter((node) => node.type === 'control').map((node) => node.config.endpoint as string))];
   const next = sim.nextTimer();
   const shownEntries = only === 'all' ? sim.entries : sim.entries.filter((entry) => ACTIONS.has(entry.kind));

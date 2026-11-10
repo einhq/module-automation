@@ -499,3 +499,53 @@ nodes:
   failing.stop();
   failing.link('x', { value: 1, topic: 'x', at: 0, hops: 70 });
 });
+
+const INBOX = `
+nodes:
+  scan: {type: file, folder: /home/anna/inbox/, match: '*.pdf', to: [show]}
+  show: {type: debug}
+`;
+
+Deno.test('graphs: a file node takes a whole folder path, without a slash at its end', () => {
+  assertEquals(automationOf(INBOX).nodes.get('scan')?.config.folder, '/home/anna/inbox');
+  for (const folder of ['inbox', '/home/anna/../bo', '/home//anna']) {
+    assertEquals(problemsOf(`nodes: {scan: {type: file, folder: '${folder}'}}`)[0].message.startsWith('folder takes a folder'), true, folder);
+  }
+});
+
+Deno.test('engine: a file is sent once written in full, if its name matches, and not once gone', () => {
+  const { engine, clock, logs } = engineOf(INBOX);
+  const sent = () => logs.filter((log) => log.kind === 'debug').map((log) => log.value);
+  const file = (path: string, change: 'came' | 'written' | 'gone', options: { empty?: boolean; folder?: string } = {}) =>
+    engine.file({ folder: options.folder ?? '/home/anna/inbox', path, change, ...(options.empty ? { empty: true } : {}), at: clock.now });
+
+  file('/home/anna/inbox/a.pdf', 'came', { empty: true });
+  clock.advance(5000);
+  assertEquals(sent(), [], 'not while it is empty');
+  file('/home/anna/inbox/a.pdf', 'written');
+  clock.advance(1000);
+  file('/home/anna/inbox/a.pdf', 'written');
+  clock.advance(1999);
+  assertEquals(sent(), [], 'not while it is written to');
+  clock.advance(1);
+  assertEquals(sent(), ['/home/anna/inbox/a.pdf']);
+  assertEquals(logs.at(-1)?.topic, '/home/anna/inbox');
+
+  file('/home/anna/inbox/a.pdf', 'written');
+  file('/home/anna/inbox/notes.txt', 'came');
+  file('/home/anna/inbox/B.PDF', 'came');
+  file('/home/anna/other/c.pdf', 'came', { folder: '/home/anna/other' });
+  file('/home/anna/inbox/gone.pdf', 'came');
+  file('/home/anna/inbox/gone.pdf', 'gone');
+  clock.advance(5000);
+  assertEquals(sent(), ['/home/anna/inbox/a.pdf', '/home/anna/inbox/B.PDF'], 'a change, another name, another folder and a file gone are not sent');
+
+  const changes = engineOf(INBOX.replace("match: '*.pdf'", 'changes: true'));
+  changes.engine.file({ folder: '/home/anna/inbox', path: '/home/anna/inbox/notes.txt', change: 'written', at: changes.clock.now });
+  changes.clock.advance(5000);
+  assertEquals(changes.logs.map((log) => log.value), ['/home/anna/inbox/notes.txt'], 'with changes, a file written again is sent');
+  changes.engine.file({ folder: '/home/anna/inbox', path: '/home/anna/inbox/late.txt', change: 'came', at: changes.clock.now });
+  changes.engine.stop();
+  changes.clock.advance(5000);
+  assertEquals(changes.logs.length, 1, 'nothing is sent once stopped');
+});
