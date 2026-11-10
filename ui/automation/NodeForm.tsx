@@ -42,6 +42,8 @@ type NodeFormProps = {
   /** Name the node `to`; answers why it cannot be, or undefined once it is. */
   onRename: (to: string) => string | undefined;
   onRemove: () => void;
+  /** Back to no node selected. */
+  onClose: () => void;
 };
 
 /** Whether the docs at the foot of a node's panel are open, the reader's setting. */
@@ -474,7 +476,7 @@ function KindDocs({ kind }: { kind: KindSpec }) {
 }
 
 /** A node's settings, as its kind in the catalog has them, each change made at once, and its docs below them. */
-export function NodeForm({ automation, running, id, node, editable, problems, onChange, onRename, onRemove }: NodeFormProps) {
+export function NodeForm({ automation, running, id, node, editable, problems, onChange, onRename, onRemove, onClose }: NodeFormProps) {
   const kind = KINDS[node.type];
   const color = kind?.color ?? 'gray';
   return (
@@ -494,6 +496,11 @@ export function NodeForm({ automation, running, id, node, editable, problems, on
             </ActionIcon>
           </Tooltip>
         )}
+        <Tooltip label='Close'>
+          <ActionIcon variant='subtle' color='gray' size={32} onClick={onClose} aria-label='Close the node'>
+            <TablerIcon name='x' size={18} />
+          </ActionIcon>
+        </Tooltip>
       </Group>
       {problems.map((problem, index) => <Alert key={index} color='red' variant='light' p='xs'>{problem.message}</Alert>)}
       <NameField id={id} disabled={!editable} onRename={onRename} />

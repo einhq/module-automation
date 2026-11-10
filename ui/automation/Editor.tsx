@@ -11,6 +11,7 @@ import { readAutomation } from '../../lib/automations/graph.ts';
 import { Canvas, type Selection, useDeleteKey } from './Canvas.tsx';
 import { addNode, disconnect, nameProblem, removeNode, renameNode, setSettings } from './graph-edit.ts';
 import { NodeForm } from './NodeForm.tsx';
+import { GROUPS, NodeKinds } from './NodeKinds.tsx';
 import type { Simulation } from './simulation.ts';
 import { Simulator, startSimulation } from './Simulator.tsx';
 
@@ -23,20 +24,12 @@ const GRAPH_SAVE_MS = 1000;
 /** How long after the last keystroke the YAML is saved: long enough to finish a word. */
 const YAML_SAVE_MS = 1500;
 
-const GROUPS = [
-  { group: 'input', label: 'Inputs' },
-  { group: 'logic', label: 'Logic' },
-  { group: 'value', label: 'Values' },
-  { group: 'time', label: 'Time' },
-  { group: 'action', label: 'Actions' },
-] as const;
-
 const failed = (error: unknown) => notify({ message: error instanceof Error ? error.message : String(error), color: 'red' });
 
 /** How wide the panel of the node tapped is, over the canvas's right edge. */
 const FORM_WIDTH = 400;
 
-/** The kinds of node to add, by group, in a menu from a button on the canvas. */
+/** The kinds of node to add, by group, in a menu from a button on the canvas: a phone's, where the panel is a drawer. */
 function Palette({ onAdd, phone }: { onAdd: (type: string) => void; phone: boolean }) {
   const kinds = Object.values(KINDS);
   return (
@@ -427,6 +420,7 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
         return undefined;
       }}
       onRemove={removeSelected}
+      onClose={() => setSelection(null)}
     />
   );
 
@@ -468,8 +462,10 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
     </>
   );
 
+  // A wide screen keeps the panel: the simulation, the node selected, or the kinds to add.
   const panel = sim ? <Simulator sim={sim} onClose={() => setSim(null)} /> : form;
-  const formOpen = Boolean(panel) && !phone;
+  const sidePanel = panel || (editable && <NodeKinds onAdd={add} />);
+  const formOpen = Boolean(sidePanel) && !phone;
   const tools = tab === 'graph' && (
     <>
       <Tooltip
@@ -489,7 +485,7 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
           <TablerIcon name='flask' size={18} />
         </ActionIcon>
       </Tooltip>
-      {editable && !sim && <Palette onAdd={add} phone={phone} />}
+      {editable && !sim && phone && <Palette onAdd={add} phone={phone} />}
       {editable && !sim && selection?.kind === 'wire' && (
         <Tooltip label='Remove the wire' position='left'>
           <ActionIcon variant='filled' color='red' size={36} onClick={removeSelected} aria-label='Remove the wire'>
@@ -534,7 +530,7 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
                   style={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: FORM_WIDTH, zIndex: 2, borderLeft: '1px solid var(--mantine-color-default-border)' }}
                 >
                   <ScrollArea h='100%' type='auto'>
-                    <Box p='md'>{panel}</Box>
+                    <Box p='md'>{sidePanel}</Box>
                   </ScrollArea>
                 </Paper>
               )}
