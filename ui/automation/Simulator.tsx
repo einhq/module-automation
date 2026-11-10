@@ -300,7 +300,7 @@ export function Simulator({ sim, onClose }: { sim: Simulation; onClose: () => vo
                 const kind = node ? KINDS[node.type] : undefined;
                 return (
                   <Group key={index} gap={8} wrap='nowrap' align='flex-start'>
-                    <Text size='xs' c='dimmed' ff='monospace' w={62} style={{ flex: '0 0 62px' }}>{timeText(entry.at)}</Text>
+                    <Text size='xs' c='dimmed' ff='monospace' style={{ flex: '0 0 auto', whiteSpace: 'nowrap' }}>{timeText(entry.at)}</Text>
                     <ThemeIcon color={kind?.color ?? ENTRY_COLOURS[entry.kind]} variant='light' size={20} radius='sm' style={{ flex: '0 0 auto' }}>
                       <TablerIcon name={kind?.icon ?? ENTRY_ICONS[entry.kind]} size={12} />
                     </ThemeIcon>
