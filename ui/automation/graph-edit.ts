@@ -6,6 +6,7 @@
 
 import type { AutomationNodeSpec, AutomationSpec } from '../../lib/api.ts';
 import { KINDS } from '../../lib/automations/catalog.ts';
+import { nameOfSender } from '../../lib/automations/graph.ts';
 
 export type Wire = { from: string; output: string; to: string };
 
@@ -90,6 +91,33 @@ export const addNode = (spec: AutomationSpec, type: string, pos: Pos): { spec: A
   let id = type;
   for (let n = 2; id in spec.nodes; n++) id = `${type}-${n}`;
   return { spec: withNode(spec, id, { type, pos }), id };
+};
+
+/** Why `to` cannot name a node of `spec`, or undefined when it can: the rules the YAML's ids have. */
+export const nameProblem = (spec: AutomationSpec, to: string): string | undefined => {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(to)) return 'Letters, digits, - and _, starting with a letter or digit';
+  if (to in spec.nodes) return `${to} names another node`;
+  return undefined;
+};
+
+/**
+ * The graph with node `from` named `to`, in its place among the others: the wires into it follow,
+ * and a math node it is wired into, which names its senders in its expression, names it anew.
+ */
+export const renameNode = (spec: AutomationSpec, from: string, to: string): AutomationSpec => {
+  if (!spec.nodes[from] || from === to || nameProblem(spec, to)) return spec;
+  const was = new RegExp(`(?<![A-Za-z0-9_])${nameOfSender(from)}(?![A-Za-z0-9_])`, 'g');
+  const receivers = new Set(Object.values(wiresBy(spec.nodes[from])).flat());
+  const nodes: Record<string, AutomationNodeSpec> = {};
+  for (const [id, node] of Object.entries(spec.nodes)) {
+    const wires = wiresBy(node);
+    let next = withWires(node, Object.fromEntries(Object.entries(wires).map(([output, ids]) => [output, ids.map((each) => each === from ? to : each)])));
+    if (receivers.has(id) && next.type === 'math' && typeof next.expression === 'string') {
+      next = { ...next, expression: next.expression.replace(was, nameOfSender(to)) };
+    }
+    nodes[id === from ? to : id] = next;
+  }
+  return { ...spec, nodes };
 };
 
 /** The graph without a node, nor the wires into it. */

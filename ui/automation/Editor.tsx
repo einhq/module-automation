@@ -9,7 +9,7 @@ import type { AutomationDetail, AutomationNodeStatus, AutomationProblem, Automat
 import { KINDS } from '../../lib/automations/catalog.ts';
 import { readAutomation } from '../../lib/automations/graph.ts';
 import { Canvas, type Selection, useDeleteKey } from './Canvas.tsx';
-import { addNode, disconnect, removeNode, setSettings } from './graph-edit.ts';
+import { addNode, disconnect, nameProblem, removeNode, renameNode, setSettings } from './graph-edit.ts';
 import { NodeForm } from './NodeForm.tsx';
 
 export type AutomationTab = 'graph' | 'yaml' | 'runs';
@@ -53,7 +53,7 @@ function Palette({ onAdd, phone }: { onAdd: (type: string) => void; phone: boole
             {kinds.filter((kind) => kind.group === group).map((kind) => (
               <Tooltip key={kind.type} label={kind.description} position='left' openDelay={400} multiline w={240} disabled={phone}>
                 <Menu.Item
-                  leftSection={<TablerIcon name={kind.icon} size={16} />}
+                  leftSection={<TablerIcon name={kind.icon} size={16} color={`var(--mantine-color-${kind.color}-filled)`} />}
                   onClick={() =>
                     onAdd(kind.type)}
                 >
@@ -369,11 +369,20 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
   const runLog = detail.module ? `/var/logs/automations.d/${name}` : `/var/logs/automations/${name}`;
   const form = selection?.kind === 'node' && selectedNode && (
     <NodeForm
+      automation={name}
+      running={detail.running}
       id={selection.id}
       node={selectedNode}
       editable={editable}
       problems={problems.filter((problem) => problem.node === selection.id)}
       onChange={(changes) => change(setSettings(spec, selection.id, changes))}
+      onRename={(to) => {
+        const problem = nameProblem(spec, to);
+        if (problem) return problem;
+        change(renameNode(spec, selection.id, to));
+        setSelection({ kind: 'node', id: to });
+        return undefined;
+      }}
       onRemove={removeSelected}
     />
   );
@@ -405,7 +414,7 @@ export function AutomationEditor({ name, tab, controls, inset, onChanged }: {
         onChange={(event) => void toggle(event.currentTarget.checked)}
         styles={{ label: { color: 'white' } }}
       />
-      {editable && <SaveState saving={saving || Boolean(dirty && !saveError)} error={saveError} phone={phone} onRetry={() => void save()} onReload={() => void load()} />}
+      {editable && <SaveState saving={saving} error={saveError} phone={phone} onRetry={() => void save()} onReload={() => void load()} />}
     </>
   );
 

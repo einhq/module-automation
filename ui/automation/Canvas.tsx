@@ -30,6 +30,8 @@ type CanvasProps = {
 
 /** The room left round the nodes when they are fitted, clear of the panels' edges and handles. */
 const FIT_MARGIN = 40;
+/** How tall a card's coloured band is: its title's line and the padding above it. */
+const CARD_BAND = 32;
 /** How far a press moves before it is a drag rather than a click. */
 const DRAG_THRESHOLD = 4;
 /** Where a node lands when it is dropped: on a grid, so nodes line up. */
@@ -231,6 +233,7 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
           </svg>
           {entries.map(([id, node]) => {
             const kind = KINDS[node.type];
+            const color = kind?.color ?? 'gray';
             const at = local(node);
             const height = nodeHeight(node);
             const wrong = problemsOf(id);
@@ -255,15 +258,16 @@ export function Canvas({ spec, editable, selection, onSelect, onChange, status, 
                   border: `${chosen ? 2 : 1}px solid ${
                     wrong.length ? 'var(--mantine-color-red-6)' : chosen ? 'var(--mantine-primary-color-filled)' : 'var(--mantine-color-default-border)'
                   }`,
-                  background: 'var(--mrx-surface-raised)',
-                  boxShadow: 'var(--mantine-shadow-xs)',
+                  // A band in the kind's colour behind its title, edged with the colour at the top.
+                  background: `linear-gradient(var(--mantine-color-${color}-light) 0 ${CARD_BAND}px, transparent ${CARD_BAND}px), var(--mrx-surface-raised)`,
+                  boxShadow: `inset 0 3px 0 var(--mantine-color-${color}-filled), var(--mantine-shadow-xs)`,
                   cursor: editable ? 'move' : 'pointer',
                   padding: '8px 14px',
                 }}
               >
                 <Stack gap={2} style={{ minWidth: 0 }}>
                   <Box style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                    <TablerIcon name={kind?.icon ?? 'help'} size={16} />
+                    <TablerIcon name={kind?.icon ?? 'help'} size={16} color={`var(--mantine-color-${color}-light-color)`} />
                     <Text size='sm' fw={600} truncate>{typeof node.label === 'string' && node.label ? node.label : id}</Text>
                   </Box>
                   <Text size='xs' c='dimmed' truncate>{wrong.length ? wrong[0].message : summaryOf(node) || kind?.label}</Text>

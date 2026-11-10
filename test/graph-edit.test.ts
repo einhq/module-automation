@@ -2,7 +2,7 @@
 
 import { assertEquals } from '@std/assert';
 import type { AutomationSpec } from '../lib/api.ts';
-import { addNode, connect, disconnect, moveNode, outputsOf, removeNode, setSettings, wiresOf, wouldCycle } from '../ui/automation/graph-edit.ts';
+import { addNode, connect, disconnect, moveNode, nameProblem, outputsOf, removeNode, renameNode, setSettings, wiresOf, wouldCycle } from '../ui/automation/graph-edit.ts';
 
 const spec: AutomationSpec = {
   nodes: {
@@ -45,4 +45,24 @@ Deno.test('graph edit: nodes added under a free name, moved, set, and removed wi
     cases: { a: { is: 1 } },
   });
   assertEquals(cases.nodes.s.to, { a: ['x'], else: ['z'] }, 'a case taken out takes its wires');
+});
+
+Deno.test('graph edit: a node renamed keeps its place, the wires into it, and the math that names it', () => {
+  const graph: AutomationSpec = {
+    nodes: {
+      'outdoor-temp': { type: 'device', endpoint: 'garden/temperature', to: ['diff'] },
+      indoor: { type: 'device', endpoint: 'hall/temperature', to: ['diff'] },
+      diff: { type: 'math', expression: 'outdoor_temp - indoor + outdoor_temperature', to: ['log'] },
+      log: { type: 'debug' },
+    },
+  };
+  const renamed = renameNode(graph, 'outdoor-temp', 'garden');
+  assertEquals(Object.keys(renamed.nodes), ['garden', 'indoor', 'diff', 'log']);
+  assertEquals(renamed.nodes.garden.to, ['diff']);
+  assertEquals(renamed.nodes.diff.expression, 'garden - indoor + outdoor_temperature', 'only the whole name');
+  assertEquals(renameNode(graph, 'log', 'printed').nodes.diff.to, ['printed']);
+  assertEquals(renameNode(graph, 'log', 'indoor'), graph, 'a name taken');
+  assertEquals(nameProblem(graph, 'indoor'), 'indoor names another node');
+  assertEquals(nameProblem(graph, '-x'), 'Letters, digits, - and _, starting with a letter or digit');
+  assertEquals(nameProblem(graph, 'fine_name-2'), undefined);
 });

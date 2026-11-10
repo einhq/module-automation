@@ -1,20 +1,49 @@
-import { TablerIcon } from '@ein/ui/components';
+import { Markdown, TablerIcon } from '@ein/ui/components';
 import { agoText, readingText, shq } from '@ein/ui/lib';
-import { execCommand } from '@ein/ui/signals';
-import { ActionIcon, Alert, Box, Button, Group, Loader, MultiSelect, NumberInput, ScrollArea, Select, Stack, Switch, Text, TextInput, UnstyledButton } from '@mantine/core';
+import { execCommand, loadUserConfig, notify, userConfigFlag } from '@ein/ui/signals';
+import { useSignals } from '@preact/signals-react/runtime';
+import {
+  ActionIcon,
+  Alert,
+  Box,
+  Button,
+  Collapse,
+  Group,
+  Loader,
+  MultiSelect,
+  NumberInput,
+  ScrollArea,
+  Select,
+  Stack,
+  Switch,
+  Text,
+  TextInput,
+  ThemeIcon,
+  Tooltip,
+  UnstyledButton,
+} from '@mantine/core';
 import { type ReactNode, useEffect, useState } from 'react';
 import type { DeviceInfo, DeviceSummary, EndpointSummary } from '@ein/api';
 import type { AutomationNodeSpec, AutomationProblem } from '../../lib/api.ts';
-import { KINDS, type SettingSpec } from '../../lib/automations/catalog.ts';
+import { KINDS, type KindSpec, type SettingSpec } from '../../lib/automations/catalog.ts';
 
 type NodeFormProps = {
+  /** The automation's name, for pressing a button node. */
+  automation: string;
+  /** Whether the automation runs, which a button node needs to be pressed. */
+  running: boolean;
   id: string;
   node: AutomationNodeSpec;
   editable: boolean;
   problems: AutomationProblem[];
   onChange: (changes: Record<string, unknown>) => void;
+  /** Name the node `to`; answers why it cannot be, or undefined once it is. */
+  onRename: (to: string) => string | undefined;
   onRemove: () => void;
 };
+
+/** Whether the docs at the foot of a node's panel are open, the reader's setting. */
+const DOCS_SETTING = 'CFG_USER_AUTOMATION_NODE_DOCS';
 
 const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
 
@@ -307,20 +336,140 @@ function DevicePicker(
   );
 }
 
-/** A node's settings, as its kind in the catalog has them, each change made at once. */
-export function NodeForm({ id, node, editable, problems, onChange, onRemove }: NodeFormProps) {
+/** The node's id, typed and taken when the field is left or Enter is pressed, or put back with Escape. */
+function NameField({ id, disabled, onRename }: { id: string; disabled: boolean; onRename: (to: string) => string | undefined }) {
+  const [text, setText] = useState(id);
+  const [problem, setProblem] = useState<string | undefined>();
+  useEffect(() => {
+    setText(id);
+    setProblem(undefined);
+  }, [id]);
+  const commit = () => {
+    const to = text.trim();
+    if (to === id) return setProblem(undefined);
+    setProblem(onRename(to));
+  };
+  return (
+    <TextInput
+      label='Name'
+      withAsterisk
+      description='What wires and math name it by, and its key in the YAML'
+      value={text}
+      error={problem}
+      disabled={disabled}
+      ff='monospace'
+      onChange={(event) => setText(event.currentTarget.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') commit();
+        if (event.key === 'Escape') {
+          setText(id);
+          setProblem(undefined);
+        }
+      }}
+    />
+  );
+}
+
+/** Press a button node of the running automation, as `automation-trigger` does. */
+function PressButton({ automation, id, running }: { automation: string; id: string; running: boolean }) {
+  const [busy, setBusy] = useState(false);
+  const press = async () => {
+    setBusy(true);
+    try {
+      await execCommand(`automation-trigger ${shq(automation)} ${shq(id)}`);
+    } catch (error) {
+      notify({ message: error instanceof Error ? error.message : String(error), color: 'red' });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Tooltip label='Only a running automation is pressed' disabled={running}>
+      <Button variant='light' leftSection={<TablerIcon name='player-play' size={16} />} loading={busy} disabled={!running} onClick={() => void press()}>
+        Press
+      </Button>
+    </Tooltip>
+  );
+}
+
+/** What a kind does and what each of its settings means, under a heading that folds, as the reader last left it. */
+function KindDocs({ kind }: { kind: KindSpec }) {
+  useSignals();
+  const open = userConfigFlag(DOCS_SETTING, true);
+  const toggle = async () => {
+    try {
+      await execCommand(`config set ${DOCS_SETTING} ${!open}`);
+      await loadUserConfig();
+    } catch (error) {
+      notify({ message: error instanceof Error ? error.message : String(error), color: 'red' });
+    }
+  };
+  const outputs = kind.outputs.length === 0
+    ? 'Nothing: it is where a line ends.'
+    : kind.boolean
+    ? `True or false, on out and on the output of that name; only when it changes${
+      kind.settings.some((each) => each.name === 'every') ? ', unless Send every result is on' : ''
+    }.`
+    : kind.type === 'switch'
+    ? 'The value, on the output of the first case it passes, or on else.'
+    : 'On out.';
+  return (
+    <Box style={{ borderTop: '1px solid var(--mantine-color-default-border)' }} pt='xs'>
+      <UnstyledButton onClick={() => void toggle()} aria-expanded={open} style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+        <TablerIcon name={open ? 'chevron-down' : 'chevron-right'} size={16} />
+        <Text size='sm' fw={600}>About {kind.label.toLowerCase()} nodes</Text>
+      </UnstyledButton>
+      <Collapse expanded={open} transitionDuration={150}>
+        <Stack gap='xs' pt='xs'>
+          <Markdown content={kind.about} />
+          <Text size='sm'>
+            <Text span fw={600}>Sends:</Text>
+            {outputs}
+          </Text>
+          {kind.input === false && <Text size='sm' c='dimmed'>Nothing is wired into it: it starts things.</Text>}
+          {kind.settings.length > 0 && (
+            <Stack gap={4}>
+              <Text size='sm' fw={600}>Settings</Text>
+              {kind.settings.map((setting) => (
+                <Text key={setting.name} size='sm'>
+                  <Text span fw={500}>{setting.label}</Text>
+                  {setting.required && <Text span c='var(--mantine-color-error)' ml={2}>*</Text>} <Text span ff='monospace' size='xs' c='dimmed'>{setting.name}</Text>
+                  {setting.help ? ` — ${setting.help}` : ''}
+                </Text>
+              ))}
+            </Stack>
+          )}
+        </Stack>
+      </Collapse>
+    </Box>
+  );
+}
+
+/** A node's settings, as its kind in the catalog has them, each change made at once, and its docs below them. */
+export function NodeForm({ automation, running, id, node, editable, problems, onChange, onRename, onRemove }: NodeFormProps) {
   const kind = KINDS[node.type];
+  const color = kind?.color ?? 'gray';
   return (
     <Stack gap='sm'>
-      <Group gap='xs' wrap='nowrap'>
-        <TablerIcon name={kind?.icon ?? 'help'} size={20} />
+      <Group gap='sm' wrap='nowrap'>
+        <ThemeIcon color={color} variant='light' size={36} radius='md'>
+          <TablerIcon name={kind?.icon ?? 'help'} size={20} />
+        </ThemeIcon>
         <Stack gap={0} style={{ minWidth: 0 }}>
-          <Text fw={600} truncate>{kind?.label ?? node.type} · {id}</Text>
+          <Text fw={600} truncate>{kind?.label ?? node.type}</Text>
           <Text size='xs' c='dimmed'>{kind?.description}</Text>
         </Stack>
       </Group>
       {problems.map((problem, index) => <Alert key={index} color='red' variant='light' p='xs'>{problem.message}</Alert>)}
-      <TextInput label='Label' value={shown(node.label)} disabled={!editable} onChange={(event) => onChange({ label: event.currentTarget.value || undefined })} />
+      <NameField id={id} disabled={!editable} onRename={onRename} />
+      <TextInput
+        label='Label'
+        description='Shown on its card in place of its name'
+        value={shown(node.label)}
+        disabled={!editable}
+        onChange={(event) => onChange({ label: event.currentTarget.value || undefined })}
+      />
       {kind?.settings.map((setting) => (
         <SettingField
           key={setting.name}
@@ -331,11 +480,13 @@ export function NodeForm({ id, node, editable, problems, onChange, onRemove }: N
           onChange={(value) => onChange({ [setting.name]: value })}
         />
       ))}
+      {node.type === 'button' && <PressButton automation={automation} id={id} running={running} />}
       {editable && (
         <Button variant='light' color='red' leftSection={<TablerIcon name='trash' size={16} />} onClick={onRemove}>
           Remove the node
         </Button>
       )}
+      {kind && <KindDocs kind={kind} />}
     </Stack>
   );
 }
