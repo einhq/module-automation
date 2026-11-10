@@ -13,6 +13,7 @@
     "@automation/automations/examples": "./lib/automations/examples.ts",
     "@automation/automations/graph": "./lib/automations/graph.ts",
     "@automation/bridge": "./lib/bridge.ts",
+    "@automation/cameras": "./lib/cameras/restreamer.ts",
     "@automation/drivers": "./lib/drivers.ts",
     "@automation/groups": "./lib/groups.ts",
     "@automation/mqtt": "./lib/mqtt.ts",

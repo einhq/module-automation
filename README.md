@@ -28,7 +28,13 @@ itself, over the network: `ipp` for a printer (state, warnings, ink and toner), 
 Cast speaker (what it plays; volume, mute, play, pause and stop), `snmp` for a NAS or anything
 else that answers SNMP (uptime, load, memory, each volume's use, temperatures; the community is
 `CFG_AUTOMATION_SNMP_COMMUNITY`), and `network` for the rest (whether it answers, and how fast).
-`automation-snmp <host> [oid]` walks what a device's agent answers. The `http` driver asks a web
+`automation-snmp <host> [oid]` walks what a device's agent answers. The `rtsp` driver takes a
+camera that sends its picture over RTSP, made by hand with `device-create 'Front door' --driver rtsp
+--config url=rtsp://… [--config sub=…] [--config user=…] --config password=…` (the password is the
+device's `.secret`): its streams are core's `stream` endpoints, `main` and `sub`, which the bridge
+gives the restreamer (`CFG_AUTOMATION_STREAMS_URL`, the sidecar's go2rtc) as `<device>-<endpoint>`,
+again whenever the restreamer lacks one. A frame of a stream is the restreamer's JPEG, and the
+**Live** tab on a camera's page plays it over MSE, through core's `/stream/dev/…` socket. The `http` driver asks a web
 API that answers JSON, made by hand with `device-create <name> --driver http --config url=… --config
 read=…`: a device on the network with an API of its own, the weather, the price of electricity, each
 reading a path in the answer (`temperature=current.temperature_2m °C`,

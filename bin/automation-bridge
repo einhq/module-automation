@@ -2,14 +2,16 @@
 /**
  * automation-bridge — the automation-bridge service: hears devices on the MQTT broker and drives
  * them as core's devices under /dev, one driver per source (ha-discovery, shelly), sending them what
- * is written to their controls, and asks the devices of the polled drivers (network, ipp, snmp, cast, http).
+ * is written to their controls, asks the devices of the polled drivers (network, ipp, snmp, cast,
+ * http), and keeps the cameras of the rtsp driver with the restreamer (CFG_AUTOMATION_STREAMS_URL).
  *
- * While CFG_AUTOMATION_MQTT_URL is empty it hears no broker and runs the polled drivers alone.
+ * While CFG_AUTOMATION_MQTT_URL is empty it hears no broker and runs the other drivers alone.
  * It runs until stopped, connecting again whenever the broker goes away.
  */
 
 import { type CmdReturn, type Command, serviceKey } from '@ein/client';
 import { runBridge } from '@automation/bridge';
+import { createRestreamer } from '@automation/cameras';
 import { DeviceWriter } from '@automation/drivers';
 import { createPolledDrivers } from '@automation/network';
 import { connectMqtt } from '@automation/mqtt';
@@ -51,7 +53,9 @@ const automationBridge = async (cmd: Command): CmdReturn => {
   });
   const password = url ? await serviceKey(cmd, 'CFG_AUTOMATION_MQTT_KEY', 'CFG_AUTOMATION_MQTT_URL') : undefined;
   const connect = url ? connectMqtt({ url, clientId, username: cmd.env.CFG_AUTOMATION_MQTT_USER, password }) : undefined;
-  await runBridge({ cmd, url, connect, sources, polled: createPolledDrivers(fetch), devices, writer, stopped });
+  const streams = (cmd.env.CFG_AUTOMATION_STREAMS_URL ?? '').trim();
+  const restreamer = streams ? createRestreamer(fetch, streams, await serviceKey(cmd, 'CFG_AUTOMATION_STREAMS_KEY', 'CFG_AUTOMATION_STREAMS_URL') ?? '') : undefined;
+  await runBridge({ cmd, url, connect, sources, polled: createPolledDrivers(fetch), restreamer, fetcher: fetch, devices, writer, stopped });
   return 0;
 };
 

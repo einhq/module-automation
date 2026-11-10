@@ -12,6 +12,16 @@
   ],
   "panels": [
     {
+      "id": "automation.live",
+      "slot": "device.tabs",
+      "label": "Live",
+      "icon": "video",
+      "route": "/camera-live?device={path}",
+      "when": {
+        "has": "stream"
+      }
+    },
+    {
       "id": "automation.found-devices",
       "slot": "devices.header",
       "label": "Found on the network",

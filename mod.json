@@ -3,7 +3,7 @@
   "version": "0.3.30",
   "description": "MQTT drivers and rules for core's devices: sensors, buttons, plugs and lights that announce themselves over MQTT (Home Assistant discovery, Shelly) become devices under /dev, devices found on the network and web APIs can be added, and automations, nodes wired into a graph, act on them when a reading, a press, a file coming into a folder or the clock says so",
   "license": "MIT",
-  "coreApi": "^0.14.11",
+  "coreApi": "^0.14.12",
   "exports": {
     "./api": "./lib/api.ts"
   },
@@ -15,6 +15,7 @@
     "@automation/automations/examples": "./lib/automations/examples.ts",
     "@automation/automations/graph": "./lib/automations/graph.ts",
     "@automation/bridge": "./lib/bridge.ts",
+    "@automation/cameras": "./lib/cameras/restreamer.ts",
     "@automation/drivers": "./lib/drivers.ts",
     "@automation/groups": "./lib/groups.ts",
     "@automation/mqtt": "./lib/mqtt.ts",
@@ -150,6 +151,31 @@
         "group": "Automation"
       },
       {
+        "key": "CFG_AUTOMATION_STREAMS_URL",
+        "scope": "system",
+        "type": "string",
+        "default": "",
+        "label": "Restreamer",
+        "description": "The restreamer cameras are given to and their streams read from, go2rtc's API as http://host:1984. setup.sh --automation runs one beside EiN, in the automation sidecar, and sets this.",
+        "group": "Automation",
+        "emptyMeans": "a camera has no live view, and its picture is asked of the camera itself",
+        "restarts": [
+          "automation-bridge"
+        ]
+      },
+      {
+        "key": "CFG_AUTOMATION_STREAMS_KEY",
+        "scope": "system",
+        "type": "secret",
+        "default": "",
+        "label": "Restreamer password",
+        "description": "The password of the restreamer's account ein, sent only to the restreamer above.",
+        "group": "Automation",
+        "restarts": [
+          "automation-bridge"
+        ]
+      },
+      {
         "key": "CFG_AUTOMATION_SNMP_COMMUNITY",
         "scope": "system",
         "type": "string",
@@ -172,6 +198,7 @@
   "ui": {
     "routes": {
       "/automations": "ui/pages/automations.tsx",
+      "/camera-live": "ui/pages/camera-live.tsx",
       "/automations/:name": "ui/pages/automations.tsx",
       "/found-devices": "ui/pages/found-devices.tsx",
       "/found-devices-button": "ui/pages/found-devices-button.tsx",

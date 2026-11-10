@@ -5,8 +5,8 @@
  * `ein/discovery/`, which it keeps as the hosts on the network `automation-found` names. When the
  * connection is lost it connects again, waiting 1 s, then twice as long each time up to a minute,
  * so a broker that is away never ends the service. Beside the sources it runs the polled drivers
- * (`network`, `ipp`, `snmp`, `cast`, `http`), which ask their devices themselves; without a broker
- * (`connect` unset) it runs those alone.
+ * (`network`, `ipp`, `snmp`, `cast`, `http`), which ask their devices themselves, and the cameras'
+ * driver (`rtsp`); without a broker (`connect` unset) it runs those alone.
  *
  * Each source is registered with core as the driver of the devices it finds, for as long as the
  * bridge runs. A value written to one of their controls (`echo on > /dev/hall-plug/switch-0`),
@@ -17,6 +17,8 @@
  */
 
 import type { Command, Driver, ModuleDevices } from '@ein/client';
+import { RTSP_DRIVER, startCameras } from './cameras/rtsp.ts';
+import type { Restreamer } from './cameras/restreamer.ts';
 import { commandValue, type DeviceWriter } from './drivers.ts';
 import type { MqttConnect, MqttConnection, MqttMessage } from './mqtt.ts';
 import { NetworkHosts } from './network/found.ts';
@@ -34,6 +36,10 @@ type BridgeOptions = {
   sources: RunningSource[];
   /** The drivers that ask devices on the network themselves, run beside the sources. */
   polled: PolledDriver[];
+  /** Where the cameras' streams are given; unset when none is set. */
+  restreamer?: Restreamer;
+  /** What the cameras' still pictures are fetched with when there is no restreamer. */
+  fetcher: typeof fetch;
   devices: ModuleDevices;
   writer: DeviceWriter;
   /** Resolves when the bridge is to stop. */
@@ -59,7 +65,7 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
 
   const state: BridgeState = {
     url: options.url,
-    drivers: [...sources.map((source) => source.name), ...options.polled.map((driver) => driver.name)],
+    drivers: [...sources.map((source) => source.name), ...options.polled.map((driver) => driver.name), RTSP_DRIVER],
     connected: false,
     since: Date.now(),
     messages: 0,
@@ -90,6 +96,7 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
   const unregister = sources.map((source) => options.devices.registerDriver(source.name, driverOf(source)));
   const poller = startPoller({ cmd, devices: options.devices, writer, network, drivers: options.polled, log: (line) => log(line) });
   state.pollNow = poller.pollNow;
+  const stopCameras = startCameras({ cmd, devices: options.devices, restreamer: options.restreamer, fetcher: options.fetcher, log: (line) => log(line) });
 
   const handle = (update: Update, source: RunningSource) => {
     if (update.kind === 'subscribe') {
@@ -154,6 +161,7 @@ export const runBridge = async (options: BridgeOptions): Promise<void> => {
 
   for (const each of unregister) each();
   poller.stop();
+  stopCameras();
   await writer.close();
   setBridgeState(undefined);
   await log('stopped');
