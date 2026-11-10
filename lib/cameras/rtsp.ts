@@ -10,7 +10,8 @@
  * given the streams it lacks, as after the sidecar started anew, every minute and whenever a frame
  * or a page asks for one it does not have. Every other minute the driver asks for a frame of the
  * camera's smallest stream to know whether it answers; the first frame and the restreamer's probe
- * say what the stream is (its size, codec and sound). Without a restreamer, a frame is the camera's still picture (`snapshot`), when it has one, and
+ * say what the stream is (its size, codec and sound). Another service, the media service, reads a
+ * stream at the restreamer's RTSP (`source`). Without a restreamer, a frame is the camera's still picture (`snapshot`), when it has one, and
  * nothing is watched live.
  */
 
@@ -185,6 +186,11 @@ export const startCameras = (options: CameraOptions): () => void => {
       for (const stream of STREAMS) await restreamer.remove(sourceName(device, stream.endpoint)).catch(() => {});
     },
     frame: async ({ device, endpoint, attrs }) => ({ bytes: await frameOf(device, attrs, endpoint), type: 'image/jpeg' }),
+    source: async ({ device, endpoint, attrs }) => {
+      if (!restreamer) throw new Error('no restreamer is set (CFG_AUTOMATION_STREAMS_URL), so no other service reads a stream');
+      await restate(device, attrs, endpoint);
+      return restreamer.rtsp(sourceName(device, endpoint));
+    },
     live: async ({ device, endpoint, attrs }) => {
       if (!restreamer) throw new Error('no restreamer is set (CFG_AUTOMATION_STREAMS_URL), so nothing is watched live');
       await restate(device, attrs, endpoint);

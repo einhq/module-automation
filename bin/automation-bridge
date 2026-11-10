@@ -54,7 +54,9 @@ const automationBridge = async (cmd: Command): CmdReturn => {
   const password = url ? await serviceKey(cmd, 'CFG_AUTOMATION_MQTT_KEY', 'CFG_AUTOMATION_MQTT_URL') : undefined;
   const connect = url ? connectMqtt({ url, clientId, username: cmd.env.CFG_AUTOMATION_MQTT_USER, password }) : undefined;
   const streams = (cmd.env.CFG_AUTOMATION_STREAMS_URL ?? '').trim();
-  const restreamer = streams ? createRestreamer(fetch, streams, await serviceKey(cmd, 'CFG_AUTOMATION_STREAMS_KEY', 'CFG_AUTOMATION_STREAMS_URL') ?? '') : undefined;
+  const restreamer = streams
+    ? createRestreamer(fetch, streams, await serviceKey(cmd, 'CFG_AUTOMATION_STREAMS_KEY', 'CFG_AUTOMATION_STREAMS_URL') ?? '', cmd.env.CFG_AUTOMATION_STREAMS_RTSP ?? '')
+    : undefined;
   await runBridge({ cmd, url, connect, sources, polled: createPolledDrivers(fetch), restreamer, fetcher: fetch, devices, writer, stopped });
   return 0;
 };

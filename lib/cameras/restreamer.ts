@@ -1,9 +1,10 @@
 /**
  * The restreamer cameras are given to: go2rtc's HTTP API, in the automation sidecar
  * (`CFG_AUTOMATION_STREAMS_URL`, as the account `ein` with `CFG_AUTOMATION_STREAMS_KEY`). It keeps
- * one connection to each source it is given and serves it again: a JPEG of it now, and MSE over a
- * WebSocket to a page. A source is named `<device>-<endpoint>`, and its address, with the camera's
- * password in it, never leaves the driver and the restreamer: go2rtc shows it masked.
+ * one connection to each source it is given and serves it again: a JPEG of it now, MSE over a
+ * WebSocket to a page, and RTSP to the media service, at `CFG_AUTOMATION_STREAMS_RTSP` as the media
+ * service reaches it, as `ein` too. A source is named `<device>-<endpoint>`, and its address, with
+ * the camera's password in it, never leaves the driver and the restreamer: go2rtc shows it masked.
  */
 
 import type { StreamInfo } from '@ein/api';
@@ -26,11 +27,13 @@ export type Restreamer = {
   probe(name: string): Promise<StreamInfo>;
   /** Where a page watches it live: go2rtc's WebSocket, with the account's credentials. */
   live(name: string): { url: string; headers: Record<string, string> };
+  /** Where the media service reads it: go2rtc's RTSP, with the account's credentials. */
+  rtsp(name: string): string;
 };
 
 const TIMEOUT_MS = 12_000;
 
-export const createRestreamer = (fetcher: Fetch, base: string, password: string): Restreamer => {
+export const createRestreamer = (fetcher: Fetch, base: string, password: string, rtspBase = ''): Restreamer => {
   const root = base.replace(/\/+$/, '');
   const headers = { authorization: `Basic ${btoa(`ein:${password}`)}` };
   const ask = async (method: string, path: string, query: Record<string, string>): Promise<Response> => {
@@ -53,6 +56,13 @@ export const createRestreamer = (fetcher: Fetch, base: string, password: string)
       return { ...(video ? { codec: video } : {}), audio: codecs.some((codec) => codec.codec_type === 'audio') };
     },
     live: (name) => ({ url: `${root.replace(/^http/, 'ws')}/api/ws?${new URLSearchParams({ src: name })}`, headers }),
+    rtsp: (name) => {
+      if (!rtspBase) throw new Error('CFG_AUTOMATION_STREAMS_RTSP is not set, so no other service is told where a stream is');
+      const url = new URL(`${rtspBase.replace(/\/+$/, '')}/${encodeURIComponent(name)}`);
+      url.username = 'ein';
+      url.password = encodeURIComponent(password);
+      return url.toString();
+    },
   };
 };
 

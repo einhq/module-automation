@@ -8,7 +8,7 @@
 
 import { assert, assertEquals } from '@std/assert';
 import type { DeviceInfo } from '@ein/api';
-import { createTestContext } from '@ein/testing';
+import { ADMIN_ACCESS, createTestContext } from '@ein/testing';
 import { jpegSize } from '../lib/cameras/restreamer.ts';
 import { sourceName, withCredentials } from '../lib/cameras/rtsp.ts';
 
@@ -73,7 +73,9 @@ Deno.test({ name: 'rtsp cameras are given to the restreamer and watched through 
   await testCtx.setup();
   const admin = await testCtx.server.createShellClient();
   try {
-    await admin.execString(`config set CFG_AUTOMATION_STREAMS_URL ${restreamer.url} && config set CFG_AUTOMATION_STREAMS_KEY streams-secret`);
+    await admin.execString(
+      `config set CFG_AUTOMATION_STREAMS_URL ${restreamer.url} && config set CFG_AUTOMATION_STREAMS_KEY streams-secret && config set CFG_AUTOMATION_STREAMS_RTSP rtsp://192.0.2.1:8554`,
+    );
     await admin.execString('service restart automation-bridge');
     await until('the rtsp driver', () => admin.execString('devices --drivers'), (text) => /rtsp/.test(text));
 
@@ -112,6 +114,13 @@ Deno.test({ name: 'rtsp cameras are given to the restreamer and watched through 
       socket.close();
       assert(answer.includes('"type":"mse"'), answer);
       assertEquals(restreamer.live, [{ src: sourceName('front-door', 'main'), authorized: true }]);
+    });
+
+    await t.step("the media service is told the restreamer's RTSP, with its account", async () => {
+      assertEquals(
+        await testCtx.harness.instance!.devices.streamSource(ADMIN_ACCESS, 'front-door', 'sub'),
+        `rtsp://ein:streams-secret@192.0.2.1:8554/${sourceName('front-door', 'sub')}`,
+      );
     });
 
     await t.step('forgetting the camera takes its streams from the restreamer', async () => {
