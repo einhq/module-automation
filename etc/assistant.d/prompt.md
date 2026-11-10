@@ -31,12 +31,16 @@ A motion light:
 description: The hall lamp on at motion when it is dark, off five minutes after the motion ends
 nodes:
   motion: { type: device, endpoint: hall-sensor/motion, to: [linger] }
-  linger: { type: timer, off-after: 5m, to: { true: [dark-and-moving], false: [lamp-off] } }
+  linger: { type: timer, off-after: 5m, to: { out: [dark-and-moving], false: [lamp-off] } }
   lux: { type: device, endpoint: hall-sensor/illuminance, to: [dark] }
   dark: { type: compare, below: 30, to: [dark-and-moving] }
   dark-and-moving: { type: and, to: { true: [lamp-on] } }
   lamp-on: { type: control, endpoint: hall-lamp/switch-0, value: on }
   lamp-off: { type: control, endpoint: hall-lamp/switch-0, value: off }
 ```
+
+An and, or, math or aggregate keeps the latest value of each node wired into it: wire a true-or-false node's out into it (true and false both), not its true alone, or it holds true for ever once true came.
+
+`automation-show automation/tour` is a tour of every kind of node, its YAML commented flow by flow.
 
 A reading worked out from several devices' (an average indoors, whether any window is open) is a virtual device rather than an automation: device-create <name> --driver virtual --config 'read=<reading>=avg <device>/<endpoint> <device>/<endpoint>', and --config 'set=away=bool' for a switch with no hardware behind it, a proposal the user confirms.

@@ -25,7 +25,7 @@ nodes:
     type: timer
     off-after: 5m
     pos: [240, 0]
-    to: {true: [dark-and-moving], false: [lamp-off]}
+    to: {out: [dark-and-moving], false: [lamp-off]}
   lux: {type: device, endpoint: hall-sensor/illuminance, pos: [0, 140], to: [dark]}
   dark: {type: compare, below: 30, pos: [240, 140], to: [dark-and-moving]}
   dark-and-moving: {type: and, pos: [480, 60], to: {true: [lamp-on]}}
