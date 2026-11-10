@@ -2,7 +2,20 @@
 
 import { assertEquals } from '@std/assert';
 import type { AutomationSpec } from '../lib/api.ts';
-import { addNode, connect, disconnect, moveNode, nameProblem, outputsOf, removeNode, renameNode, setSettings, wiresOf, wouldCycle } from '../ui/automation/graph-edit.ts';
+import {
+  addNode,
+  connect,
+  disconnect,
+  mayConnect,
+  moveNode,
+  nameProblem,
+  outputsOf,
+  removeNode,
+  renameNode,
+  setSettings,
+  wiresOf,
+  wouldCycle,
+} from '../ui/automation/graph-edit.ts';
 
 const spec: AutomationSpec = {
   nodes: {
@@ -65,4 +78,11 @@ Deno.test('graph edit: a node renamed keeps its place, the wires into it, and th
   assertEquals(nameProblem(graph, 'indoor'), 'indoor names another node');
   assertEquals(nameProblem(graph, '-x'), 'Letters, digits, - and _, starting with a letter or digit');
   assertEquals(nameProblem(graph, 'fine_name-2'), undefined);
+});
+
+Deno.test('graph edit: the cards a wire may be dropped on, as one being drawn shows them', () => {
+  const may = (from: string, output: string) => Object.keys(spec.nodes).filter((to) => mayConnect(spec, { from, output, to }));
+  assertEquals(may('linger', 'true'), [], 'lamp has it already, motion and clock take no input, and not itself');
+  assertEquals(may('linger', 'false'), ['lamp']);
+  assertEquals(may('lamp', 'out'), [], 'back to linger would go round');
 });

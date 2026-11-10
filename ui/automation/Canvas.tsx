@@ -5,7 +5,7 @@ import { ActionIcon, Box, Stack, Text, Tooltip } from '@mantine/core';
 import { type PointerEvent as ReactPointerEvent, type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { AutomationNodeSpec, AutomationNodeStatus, AutomationProblem, AutomationSpec } from '../../lib/api.ts';
 import { KINDS } from '../../lib/automations/catalog.ts';
-import { connect, moveNode, outputsOf, takesInput, type Wire, wiresOf } from './graph-edit.ts';
+import { connect, mayConnect, moveNode, outputsOf, takesInput, type Wire, wiresOf } from './graph-edit.ts';
 import { agoText, CANVAS_PAD, FRESH_MS, inputY, NODE_WIDTH, nodeHeight, outputY, statusText, summaryOf, wireMiddle, wirePath, wireValue } from './node-view.ts';
 
 export type Selection = { kind: 'node'; id: string } | { kind: 'wire'; wire: Wire };
@@ -118,7 +118,7 @@ export function Canvas(
   /** A card being dragged: where it and the pointer began. */
   const drag = useRef<{ id: string; pointer: number; x: number; y: number; from: [number, number]; moved: boolean } | null>(null);
   /** A wire being drawn from an output, its loose end at the pointer, in the drawing's terms. */
-  const [loose, setLoose] = useState<{ from: string; output: string; x: number; y: number } | null>(null);
+  const [loose, setLoose] = useState<{ from: string; output: string; x: number; y: number; over?: string } | null>(null);
 
   const onCardDown = (id: string) => (event: ReactPointerEvent) => {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
@@ -154,8 +154,14 @@ export function Canvas(
     event.stopPropagation();
     if (!loose) return;
     const at = panZoom.toDrawing(event.clientX, event.clientY);
-    if (at) setLoose({ ...loose, x: at.x, y: at.y });
+    const over = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-node-id]')?.getAttribute('data-node-id') ?? undefined;
+    if (at) setLoose({ ...loose, x: at.x, y: at.y, over });
   };
+  /** While a wire is drawn, the cards it may be dropped on: the same test a drop makes. */
+  const targets = useMemo(
+    () => loose ? new Set(Object.keys(spec.nodes).filter((to) => mayConnect(spec, { from: loose.from, output: loose.output, to }))) : undefined,
+    [spec, loose?.from, loose?.output],
+  );
   const onPortUp = (event: ReactPointerEvent) => {
     event.stopPropagation();
     if (!loose) return;
@@ -279,20 +285,30 @@ export function Canvas(
                   <Text size='xs' c='dimmed' truncate mt={8}>{wrong.length ? wrong[0].message : summaryOf(node) || kind?.label}</Text>
                   {(status?.[id]?.problem || said) && <Text size='xs' c={status?.[id]?.problem ? 'red' : 'teal'} truncate>{status?.[id]?.problem ?? said}</Text>}
                 </Stack>
-                {kind?.input !== false && (
-                  <Box
-                    style={{
-                      position: 'absolute',
-                      left: -7,
-                      top: inputY(node) - 7,
-                      width: 14,
-                      height: 14,
-                      borderRadius: '50%',
-                      background: 'var(--mrx-surface-raised)',
-                      border: '2px solid var(--mantine-color-dimmed)',
-                    }}
-                  />
-                )}
+                {kind?.input !== false && (() => {
+                  // While a wire is drawn: lit where it may go, more so under the pointer, dim elsewhere.
+                  const target = targets?.has(id);
+                  const over = target && loose?.over === id;
+                  const size = over ? 22 : target ? 18 : 14;
+                  return (
+                    <Box
+                      data-wire-target={target || undefined}
+                      style={{
+                        position: 'absolute',
+                        left: -size / 2,
+                        top: inputY(node) - size / 2,
+                        width: size,
+                        height: size,
+                        borderRadius: '50%',
+                        background: target ? 'var(--mantine-primary-color-filled)' : 'var(--mrx-surface-raised)',
+                        border: `2px solid ${target ? 'var(--mantine-primary-color-light-color)' : 'var(--mantine-color-dimmed)'}`,
+                        boxShadow: target ? `0 0 0 ${over ? 8 : 4}px var(--mantine-primary-color-light)` : undefined,
+                        opacity: targets && !target ? 0.35 : 1,
+                        transition: 'width 120ms, height 120ms, left 120ms, top 120ms, box-shadow 120ms',
+                      }}
+                    />
+                  );
+                })()}
                 {outputsOf(node).map((output) => (
                   <Tooltip key={output} label={output} disabled={outputsOf(node).length < 2} position='right' withArrow>
                     <Box

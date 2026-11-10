@@ -71,6 +71,9 @@ export const wouldCycle = (spec: AutomationSpec, from: string, to: string): bool
 };
 
 /** The graph with `wire` in it; the same graph when it is there, goes nowhere a wire may, or would go round. */
+/** Whether `wire` may be drawn: what `connect` checks before it draws one. */
+export const mayConnect = (spec: AutomationSpec, wire: Wire): boolean => connect(spec, wire) !== spec;
+
 export const connect = (spec: AutomationSpec, wire: Wire): AutomationSpec => {
   const from = spec.nodes[wire.from];
   if (!from || !takesInput(spec.nodes[wire.to]) || !outputsOf(from).includes(wire.output) || wouldCycle(spec, wire.from, wire.to)) return spec;
