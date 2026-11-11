@@ -159,9 +159,7 @@ export const startPoller = (options: PollerOptions): Poller => {
             driver.check(attrs?.config ?? {});
           } catch (error) {
             throw new Error(
-              `${device} was made, but ${driver.name} cannot ask it: ${message(error)}; change its config with attrs -J 'config={…}' ${
-                devicePath(device)
-              }, or device-forget ${device}`,
+              `${driver.name} cannot ask ${device}: ${message(error)}; change its config with device-config ${device} name=value, or device-forget ${device}`,
             );
           }
         }

@@ -363,7 +363,7 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
 
         const refused = await anna.exec(`device-create Prices --driver http --config 'url=http://127.0.0.1/' --config 'read=price'`);
         assertEquals(refused.success, false);
-        assertStringIncludes(refused.error ?? '', "prices was made, but http cannot ask it: a reading is name=path [unit], not 'price'");
+        assertStringIncludes(refused.error ?? '', "http cannot ask prices: a reading is name=path [unit], not 'price'");
       } finally {
         await server.shutdown();
       }
