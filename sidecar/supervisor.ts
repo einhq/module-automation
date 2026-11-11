@@ -11,9 +11,9 @@
  *   accounts, `ein` and `device`. No anonymous client is let in. Its retained messages and the
  *   hashed passwords are kept in `/data/mqtt`.
  * - `STREAMS_PORT` (1984), the restreamer's HTTP API (sources, MSE over WebSocket, a JPEG frame);
- *   `RTSP_PORT` (8554), where it serves each source again over RTSP; `WEBRTC_PORT` (8555, TCP and
- *   UDP); `STREAMS_PASSWORD`, required: the API and RTSP's account `ein`. The API asks for it from
- *   this machine too; RTSP does not, as go2rtc lets loopback in.
+ *   `RTSP_PORT` (8554), where it serves each source again over RTSP; `STREAMS_PASSWORD`, required:
+ *   the API and RTSP's account `ein`. The API asks for it from this machine too; RTSP does not, as
+ *   go2rtc lets loopback in.
  * - The listener's own settings (`DISCOVERY_INTERVAL`, `DISCOVERY_FORGET`, `DISCOVERY_PREFIX`),
  *   passed on to it.
  *
@@ -43,7 +43,6 @@ const BIND = env('EIN_BIND', '0.0.0.0');
 const MQTT_PORT = port('MQTT_PORT', 1883);
 const STREAMS_PORT = port('STREAMS_PORT', 1984);
 const RTSP_PORT = port('RTSP_PORT', 8554);
-const WEBRTC_PORT = port('WEBRTC_PORT', 8555);
 const EIN_PASSWORD = required('MQTT_EIN_PASSWORD');
 const DEVICE_PASSWORD = required('MQTT_DEVICE_PASSWORD');
 const STREAMS_PASSWORD = required('STREAMS_PASSWORD');
@@ -93,8 +92,9 @@ const prepareRestreamer = async (): Promise<void> => {
       `  listen: ${quoted(listen(RTSP_PORT))}`,
       '  username: ein',
       `  password: ${quoted(STREAMS_PASSWORD)}`,
+      // go2rtc opens WebRTC on 8555 unless told not to; pages watch over the API's WebSocket.
       'webrtc:',
-      `  listen: ${quoted(`:${WEBRTC_PORT}`)}`,
+      '  listen: ""',
       'log:',
       '  format: text',
       '  level: info',
@@ -201,7 +201,7 @@ if (import.meta.main) {
   await prepareRestreamer();
   Deno.addSignalListener('SIGTERM', stop);
   Deno.addSignalListener('SIGINT', stop);
-  log(`broker on ${BIND}:${MQTT_PORT}, restreamer on ${BIND}:${STREAMS_PORT} (RTSP ${RTSP_PORT}, WebRTC ${WEBRTC_PORT})`);
+  log(`broker on ${BIND}:${MQTT_PORT}, restreamer on ${BIND}:${STREAMS_PORT} (RTSP ${RTSP_PORT})`);
   const [broker, listener, restreamer] = children;
   const running = [keep(broker)];
   await waitForBroker(10_000);
