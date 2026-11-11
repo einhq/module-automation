@@ -1,16 +1,19 @@
 /**
- * The rtsp driver in a booted EiN, against a stub of the restreamer's API: a camera made with its
- * stream's address and password is given to the restreamer with the password in the address and
- * nowhere else, its streams say their size and codec, a frame and the live socket come through
- * core, a stream the restreamer lost is given back when it is asked for, and forgetting the camera
- * takes its streams from the restreamer.
+ * The camera drivers in a booted EiN, against a stub of the restreamer's API. The rtsp driver: a
+ * camera made with its stream's address and password is given to the restreamer with the password
+ * in the address and nowhere else, its streams say their size and codec, a frame and the live socket
+ * come through core, a stream the restreamer lost is given back when it is asked for, and forgetting
+ * the camera takes its streams from the restreamer. The onvif driver, against a stub camera: its
+ * profiles become the streams, its motion and people seen are logged, and its presets and moves are
+ * controls.
  */
 
 import { assert, assertEquals } from '@std/assert';
 import type { DeviceInfo } from '@ein/api';
 import { ADMIN_ACCESS, createTestContext } from '@ein/testing';
 import { jpegSize } from '../lib/cameras/restreamer.ts';
-import { sourceName, withCredentials } from '../lib/cameras/rtsp.ts';
+import { startOnvifCamera } from './onvif-camera.ts';
+import { sourceName, withCredentials } from '../lib/cameras/camera.ts';
 
 /** A JPEG's start, a 640×360 frame header and its end: all a frame needs to say its size. */
 const FRAME = new Uint8Array([0xff, 0xd8, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x01, 0x68, 0x02, 0x80, 0x01, 0x01, 0x11, 0x00, 0xff, 0xd9]);
@@ -131,5 +134,70 @@ Deno.test({ name: 'rtsp cameras are given to the restreamer and watched through 
     admin.close();
     await testCtx.teardown();
     await restreamer.server.shutdown();
+  }
+});
+
+Deno.test({ name: 'onvif cameras give their profiles, events and turns', sanitizeResources: false, sanitizeOps: false }, async (t) => {
+  const restreamer = stubRestreamer('streams-secret');
+  const camera = startOnvifCamera({ user: 'admin', password: 's3cret', clockOffsetMs: 5 * 60_000 });
+  const testCtx = createTestContext({ modules: ['automation'], boot: true, env: { CFG_AUTOMATION_MQTT_URL: '' } });
+  await testCtx.setup();
+  const admin = await testCtx.server.createShellClient();
+  const show = () => admin.execJson<DeviceInfo>('device-show gate');
+  const endpoint = (info: DeviceInfo, name: string) => info.endpointList.find((each) => each.name === name);
+  try {
+    await admin.execString(`config set CFG_AUTOMATION_STREAMS_URL ${restreamer.url} && config set CFG_AUTOMATION_STREAMS_KEY streams-secret`);
+    await admin.execString('service restart automation-bridge');
+    await until('the onvif driver', () => admin.execString('devices --drivers'), (text) => /onvif/.test(text));
+
+    await t.step('its largest profile is the main stream and its smallest the sub, at the address it was reached at', async () => {
+      await admin.execString(`device-create Gate --driver onvif --config address=${camera.address()} --config user=admin --config password=s3cret`);
+      assertEquals([...restreamer.sources], [
+        [sourceName('gate', 'main'), 'rtsp://admin:s3cret@127.0.0.1:554/main'],
+        [sourceName('gate', 'sub'), 'rtsp://admin:s3cret@127.0.0.1:554/sub'],
+      ]);
+      const info = await show();
+      assertEquals([info.class, info.online, info.config?.password], ['camera', true, undefined]);
+      // The frame rate is the camera's to say; what the restreamer sees of a stream (the stub's frame and probe) wins over the rest.
+      assertEquals(endpoint(info, 'main')?.stream, { codec: 'h264', width: 640, height: 360, fps: 25, audio: true });
+      assertEquals(endpoint(info, 'sub')?.stream, { codec: 'h264', width: 640, height: 360, fps: 25, audio: true });
+    });
+
+    await t.step('motion and a person seen are logged as the camera says them', async () => {
+      await until('the event endpoints', show, (info) => !!endpoint(info, 'motion') && !!endpoint(info, 'person'));
+      camera.events.push({ topic: 'tns1:RuleEngine/CellMotionDetector/Motion', name: 'IsMotion', value: 'true' });
+      camera.events.push({ topic: 'tns1:RuleEngine/PeopleDetector/People', name: 'State', value: 'true' });
+      const info = await until('the events', show, (info) => endpoint(info, 'motion')?.last?.value === true && endpoint(info, 'person')?.last?.value === true);
+      assertEquals([endpoint(info, 'motion')?.deviceClass, endpoint(info, 'person')?.label], ['motion', 'Person']);
+      camera.events.push({ topic: 'tns1:RuleEngine/CellMotionDetector/Motion', name: 'IsMotion', value: 'false' });
+      await until('motion over', show, (info) => endpoint(info, 'motion')?.last?.value === false);
+    });
+
+    await t.step('a preset and a move are sent to the camera', async () => {
+      const info = await until('the controls', show, (info) => !!endpoint(info, 'ptz-preset'));
+      assertEquals(endpoint(info, 'ptz-preset')?.schema, { type: 'enum', options: ['Gate', 'Driveway'] });
+      assertEquals(info.endpointList.filter((each) => each.schema?.type === 'momentary').map((each) => each.name).sort(), [
+        'ptz-down',
+        'ptz-left',
+        'ptz-right',
+        'ptz-up',
+        'ptz-zoom-in',
+        'ptz-zoom-out',
+      ]);
+      await admin.execString('echo Driveway > /dev/gate/ptz-preset && echo press > /dev/gate/ptz-left && echo press > /dev/gate/ptz-zoom-in');
+      assertEquals(camera.ptz, ['goto 2', 'move -0.5,0 -', 'stop', 'move - 0.5', 'stop']);
+      assertEquals(endpoint(await show(), 'ptz-preset')?.last?.value, 'Driveway');
+    });
+
+    await t.step('forgetting the camera takes its streams from the restreamer and lets its events go', async () => {
+      await admin.execString('device-forget gate');
+      assertEquals(restreamer.sources.size, 0);
+      await until('the PullPoint let go', async () => camera.asked, (asked) => asked.includes('Unsubscribe'));
+    });
+  } finally {
+    admin.close();
+    await testCtx.teardown();
+    await restreamer.server.shutdown();
+    await camera.server.shutdown();
   }
 });

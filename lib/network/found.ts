@@ -60,7 +60,7 @@ export class NetworkHosts {
     }
     try {
       const host = JSON.parse(payload);
-      if (isHost(host)) this.hosts.set(id, host);
+      if (isHost(host)) this.hosts.set(id, { ...host, wsd: Array.isArray(host.wsd) ? host.wsd : [] });
     } catch {
       // Not the listener's JSON: nothing to keep.
     }
@@ -82,7 +82,13 @@ export const foundDevices = (network: NetworkHosts, devices: KnownDevice[], igno
       ...(host.mac ? { mac: host.mac } : {}),
       names: host.names,
       seen: host.seen,
-      services: [...new Set([...host.mdns.map((each) => each.type), ...host.ssdp.flatMap((each) => each.deviceType ? [each.deviceType] : [])])],
+      services: [
+        ...new Set([
+          ...host.mdns.map((each) => each.type),
+          ...host.ssdp.flatMap((each) => each.deviceType ? [each.deviceType] : []),
+          ...host.wsd.flatMap((each) => each.types),
+        ]),
+      ],
       ...(device ? { device } : {}),
       ignored: ignored.has(id),
     };

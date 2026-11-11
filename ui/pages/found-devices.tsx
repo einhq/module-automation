@@ -2,7 +2,7 @@ import { EmptyState, EntityDetailHeader, HeaderChoice, HeaderFilterBar, HeaderSt
 import { usePersistedState, usePolledCommand, useUrlParam } from '@ein/ui/hooks';
 import { countOf, matchesText, shq } from '@ein/ui/lib';
 import { execCommand, notify, openDialog } from '@ein/ui/signals';
-import { Alert, Badge, Box, Button, Card, Group, SimpleGrid, Stack, Text } from '@mantine/core';
+import { Alert, Badge, Box, Button, Card, Group, PasswordInput, Popover, SimpleGrid, Stack, Text, TextInput } from '@mantine/core';
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { AdoptAnswer, FoundAnswer, FoundDevice } from '@automation/api';
@@ -13,6 +13,7 @@ type Scope = 'addable' | 'new' | 'all';
 
 /** The icon of each kind of thing on the network. */
 const ICONS: Record<string, string> = {
+  camera: 'camera',
   shelly: 'plug',
   'shelly-gen1': 'plug',
   esphome: 'cpu',
@@ -39,6 +40,8 @@ const agoText = (iso: string): string => {
 function FoundCard({ found, onChanged, onOpen }: { found: FoundDevice; onChanged: () => void; onOpen: () => void }) {
   const navigate = useNavigate();
   const [busy, setBusy] = useState<'add' | 'ignore' | null>(null);
+  /** A camera's sign-in, asked before it is added. */
+  const [signIn, setSignIn] = useState<{ user: string; password: string } | null>(null);
   const what = [found.vendor, found.model].filter(Boolean).join(' ');
 
   const ignore = async () => {
@@ -56,7 +59,9 @@ function FoundCard({ found, onChanged, onOpen }: { found: FoundDevice; onChanged
   const add = async () => {
     setBusy('add');
     try {
-      const added = await execCommand<AdoptAnswer>(`automation-adopt ${shq(found.id)}`);
+      const account = signIn ? ` --user ${shq(signIn.user)} --password ${shq(signIn.password)}` : '';
+      const added = await execCommand<AdoptAnswer>(`automation-adopt ${shq(found.id)}${account}`);
+      setSignIn(null);
       if (added.device) {
         const device = added.device;
         notify({ message: `${found.label} is a device now`, color: 'green', action: { label: 'Open', onClick: () => navigate(`/devices/${encodeURIComponent(device)}`) } });
@@ -95,7 +100,7 @@ function FoundCard({ found, onChanged, onOpen }: { found: FoundDevice; onChanged
             Open
           </Button>
         )}
-        {!found.device && found.adopt && (
+        {!found.device && found.adopt && found.adopt !== 'onvif' && (
           <Button
             size='xs'
             loading={busy === 'add'}
@@ -105,6 +110,51 @@ function FoundCard({ found, onChanged, onOpen }: { found: FoundDevice; onChanged
           >
             Add
           </Button>
+        )}
+        {!found.device && found.adopt === 'onvif' && (
+          <Popover
+            opened={signIn !== null}
+            onChange={(opened) => !opened && setSignIn(null)}
+            position='bottom-start'
+            withArrow
+            trapFocus
+          >
+            <Popover.Target>
+              <Button
+                size='xs'
+                disabled={busy !== null}
+                leftSection={<TablerIcon name='plus' size={14} />}
+                onClick={() => setSignIn(signIn ? null : { user: 'admin', password: '' })}
+              >
+                Add
+              </Button>
+            </Popover.Target>
+            <Popover.Dropdown>
+              <form
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  add();
+                }}
+              >
+                <Stack gap='xs' w={220}>
+                  <Text size='xs' c='dimmed'>The account EiN signs in to the camera with</Text>
+                  <TextInput
+                    size='xs'
+                    label='User'
+                    value={signIn?.user ?? ''}
+                    onChange={(event) => setSignIn({ user: event.currentTarget.value, password: signIn?.password ?? '' })}
+                  />
+                  <PasswordInput
+                    size='xs'
+                    label='Password'
+                    value={signIn?.password ?? ''}
+                    onChange={(event) => setSignIn({ user: signIn?.user ?? '', password: event.currentTarget.value })}
+                  />
+                  <Button size='xs' type='submit' loading={busy === 'add'}>Add camera</Button>
+                </Stack>
+              </form>
+            </Popover.Dropdown>
+          </Popover>
         )}
         {!found.device && (
           <Button
@@ -188,7 +238,7 @@ export default function FoundDevicesPage() {
                 <EmptyState title={scope === 'addable' ? 'Nothing to add' : 'Nothing found'}>
                   {scope === 'addable'
                     ? 'Every device found that EiN can take is a device already. Show everything to see the rest of the network.'
-                    : 'What answers on the network over mDNS and SSDP shows up here within a few minutes.'}
+                    : 'What answers on the network over mDNS, SSDP and WS-Discovery shows up here within a few minutes.'}
                 </EmptyState>
               )}
             </>

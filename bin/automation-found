@@ -1,7 +1,7 @@
 #!ts
 /**
  * automation-found — the devices on the network that the network listener beside the broker heard
- * over mDNS and SSDP, what each is, and whether it is a device under /dev already. For members of
+ * over mDNS, SSDP and WS-Discovery, what each is, and whether it is a device under /dev already. For members of
  * the devices group.
  *
  *   automation-found              the ones that are no device yet, and not ignored
@@ -70,7 +70,7 @@ automationFound.spec = {
   name: 'automation-found',
   effect: 'read' as const,
   description:
-    'The devices on the network the network listener heard over mDNS and SSDP: what each is, whether it can become a device and whether it is one already (for members of the devices group)',
+    'The devices on the network the network listener heard over mDNS, SSDP and WS-Discovery: what each is, whether it can become a device and whether it is one already (for members of the devices group)',
   flags: [
     { name: 'addable', type: 'bool' as const, description: 'only the ones that can become a device of automation’s' },
     { name: 'all', type: 'bool' as const, description: 'every one, the devices already under /dev and the ignored ones too' },

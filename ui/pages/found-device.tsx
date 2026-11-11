@@ -42,7 +42,7 @@ function Pairs({ rows }: { rows: [string, string | number | undefined][] }) {
 /**
  * Everything the network listener heard of one host (`/found-devices/:id`, opened as a dialog from
  * a card): what EiN makes of it, each mDNS service with its TXT records, each SSDP answer with what
- * its UPnP description says, and the whole message, raw. For a device EiN does not support yet, it
+ * its UPnP description says, each WS-Discovery match with its scopes, and the whole message, raw. For a device EiN does not support yet, it
  * is what there is to go on.
  */
 export default function FoundDevicePage() {
@@ -96,6 +96,15 @@ export default function FoundDevicePage() {
                   ['usn', answer.usn],
                 ]}
               />
+            </Stack>
+          ))}
+          {data.host.wsd.length > 0 && <Title order={5}>WS-Discovery</Title>}
+          {data.host.wsd.map((match) => (
+            <Stack key={match.endpoint ?? match.xaddrs.join(' ')} gap={4}>
+              <Group gap='xs'>
+                {match.types.map((type) => <Badge key={type} variant='light' color='teal' tt='none'>{type}</Badge>)}
+              </Group>
+              <Pairs rows={[['endpoint', match.endpoint], ['services', match.xaddrs.join(' ')], ['scopes', match.scopes.join(' ')]]} />
             </Stack>
           ))}
           <Title order={5}>Raw</Title>

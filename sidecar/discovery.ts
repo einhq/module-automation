@@ -1,7 +1,8 @@
 /**
  * The network listener, one of the sidecar's three: what announces itself on this machine's network
- * over mDNS (Bonjour, `_shelly._tcp`, `_hap._tcp`, …) and SSDP (UPnP: TVs, speakers, routers),
- * published on the broker for the Automation module to name and offer as devices.
+ * over mDNS (Bonjour, `_shelly._tcp`, `_hap._tcp`, …), SSDP (UPnP: TVs, speakers, routers) and
+ * WS-Discovery (ONVIF cameras), published on the broker for the Automation module to name and offer
+ * as devices.
  *
  * It runs on the host's network, since the multicast it asks with stays on the network it is sent
  * on. Every round (DISCOVERY_INTERVAL seconds, 120 by default) it asks:
@@ -11,6 +12,7 @@
  *   224.0.0.251 on every interface: minimal responders (Shelly's first generation) answer only a
  *   question from 5353, and only to the group. What is announced between rounds counts for the next;
  * - SSDP: `M-SEARCH ssdp:all`, then the description each answer points at, once per address;
+ * - WS-Discovery: a `Probe` for ONVIF's `NetworkVideoTransmitter`, to 239.255.255.250:3702;
  * - the host's ARP table, for the hardware address of each IP that answered.
  *
  * What one address said is one retained JSON message, `<prefix>/host/<id>` (`ein/discovery` by
@@ -19,7 +21,8 @@
  *   { ip, mac?, names: [host.local], seen: <ISO time>,
  *     mdns: [{ type, instance, port?, txt: {k: v} }],
  *     ssdp: [{ st, usn?, server?, location?, friendlyName?, manufacturer?, modelName?,
- *              modelNumber?, serialNumber?, deviceType?, udn? }] }
+ *              modelNumber?, serialNumber?, deviceType?, udn? }],
+ *     wsd: [{ endpoint?, types: [], scopes: [], xaddrs: [] }] }
  *
  * An address unheard for DISCOVERY_FORGET seconds (a day by default) is cleared with an empty
  * retained message. `<prefix>/status`, retained, says when the last round was, how many addresses
@@ -65,7 +68,9 @@ type SsdpService = {
   deviceType?: string;
   udn?: string;
 };
-type Host = { ip: string; mac?: string; names: string[]; seen: string; mdns: MdnsService[]; ssdp: SsdpService[] };
+/** A WS-Discovery match: its endpoint's id (`urn:uuid:…`), its types, its scopes and where its services are. */
+type WsdService = { endpoint?: string; types: string[]; scopes: string[]; xaddrs: string[] };
+type Host = { ip: string; mac?: string; names: string[]; seen: string; mdns: MdnsService[]; ssdp: SsdpService[]; wsd: WsdService[] };
 
 // ---- DNS messages ----
 
@@ -168,7 +173,7 @@ const ask = async (group: string, port: number, payload: Uint8Array): Promise<Da
 
 // ---- what is heard ----
 
-type Heard = Map<string, { names: Set<string>; mdns: Map<string, MdnsService>; ssdp: Map<string, SsdpService> }>;
+type Heard = Map<string, { names: Set<string>; mdns: Map<string, MdnsService>; ssdp: Map<string, SsdpService>; wsd: Map<string, WsdService> }>;
 
 /** What answered since the last round, by address. */
 let heard: Heard = new Map();
@@ -177,7 +182,7 @@ let types = new Set<string>();
 
 const heardAt = (ip: string) => {
   let host = heard.get(ip);
-  if (!host) heard.set(ip, host = { names: new Set(), mdns: new Map(), ssdp: new Map() });
+  if (!host) heard.set(ip, host = { names: new Set(), mdns: new Map(), ssdp: new Map(), wsd: new Map() });
   return host;
 };
 
@@ -309,6 +314,33 @@ const askSsdp = async (): Promise<void> => {
   }));
 };
 
+/** The text of the first element called `name`, whatever its prefix. */
+const xmlText = (xml: string, name: string): string | undefined => xml.match(new RegExp(`<(?:[\\w-]+:)?${name}\\b[^>]*>([^<]*)</(?:[\\w-]+:)?${name}>`))?.[1]?.trim();
+const words = (text: string | undefined): string[] => text ? text.split(/\s+/).filter(Boolean) : [];
+
+/** Who answers an ONVIF `Probe`, by address: each match's types, scopes and service addresses. */
+const askWsd = async (): Promise<void> => {
+  const probe = '<?xml version="1.0" encoding="UTF-8"?>' +
+    '<e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope" xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing" ' +
+    'xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery" xmlns:dn="http://www.onvif.org/ver10/network/wsdl">' +
+    `<e:Header><w:MessageID>uuid:${crypto.randomUUID()}</w:MessageID>` +
+    '<w:To e:mustUnderstand="true">urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To>' +
+    '<w:Action e:mustUnderstand="true">http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action></e:Header>' +
+    '<e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></e:Body></e:Envelope>';
+  for (const answer of await ask('239.255.255.250', 3702, new TextEncoder().encode(probe))) {
+    for (const service of probeMatches(new TextDecoder().decode(answer.data))) heardAt(answer.ip).wsd.set(service.endpoint ?? service.xaddrs.join(' '), service);
+  }
+};
+
+/** The matches in a `ProbeMatches` answer that name where their services are. */
+export const probeMatches = (text: string): WsdService[] =>
+  [...text.matchAll(/<(?:[\w-]+:)?ProbeMatch\b[^>]*>([\s\S]*?)<\/(?:[\w-]+:)?ProbeMatch>/g)].map((match) => ({
+    endpoint: xmlText(match[1], 'Address'),
+    types: words(xmlText(match[1], 'Types')),
+    scopes: words(xmlText(match[1], 'Scopes')),
+    xaddrs: words(xmlText(match[1], 'XAddrs')),
+  })).filter((service) => service.xaddrs.length > 0);
+
 /** The host's ARP table: hardware address by IP, for the addresses it has talked to. */
 const arpTable = async (): Promise<Map<string, string>> => {
   const table = new Map<string, string>();
@@ -329,20 +361,21 @@ const arpTable = async (): Promise<Map<string, string>> => {
 };
 
 const round = async (mdns: Deno.DatagramConn): Promise<Host[]> => {
-  const results = await Promise.allSettled([askMdns(mdns), askSsdp()]);
+  const results = await Promise.allSettled([askMdns(mdns), askSsdp(), askWsd()]);
   for (const result of results) if (result.status === 'rejected') log(`asking: ${message(result.reason)}`);
   const answered = heard;
   heard = new Map();
   types = new Set();
   const arp = await arpTable();
   const seen = new Date().toISOString();
-  return [...answered].filter(([, host]) => host.mdns.size || host.ssdp.size).map(([ip, host]) => ({
+  return [...answered].filter(([, host]) => host.mdns.size || host.ssdp.size || host.wsd.size).map(([ip, host]) => ({
     ip,
     ...(arp.get(ip) ? { mac: arp.get(ip) } : {}),
     names: [...host.names].sort(),
     seen,
     mdns: [...host.mdns.values()],
     ssdp: [...host.ssdp.values()],
+    wsd: [...host.wsd.values()],
   }));
 };
 

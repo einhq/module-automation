@@ -115,8 +115,8 @@ export type AutomationCheck = {
 
 /**
  * One address on the network as the network listener heard it, `ein/discovery/host/<id>` on the
- * broker: its mDNS services and SSDP answers, and its hardware address when the listener's host had
- * talked to it.
+ * broker: its mDNS services, SSDP answers and WS-Discovery matches, and its hardware address when the
+ * listener's host had talked to it.
  */
 export type NetworkHost = {
   ip: string;
@@ -139,11 +139,13 @@ export type NetworkHost = {
     deviceType?: string;
     udn?: string;
   }[];
+  /** What it answered an ONVIF probe: its endpoint's id, types, scopes (`onvif://www.onvif.org/name/…`) and service addresses. */
+  wsd: { endpoint?: string; types: string[]; scopes: string[]; xaddrs: string[] }[];
 };
 
 /** What a host on the network is. */
 export type NetworkIdentity = {
-  /** `shelly`, `shelly-gen1`, `esphome`, `tasmota`, `matter`, `homekit`, `hue`, `sonos`, `cast`, `airplay`, `printer`, `router`, `media`, `storage` or `other`. */
+  /** `camera`, `shelly`, `shelly-gen1`, `esphome`, `tasmota`, `matter`, `homekit`, `hue`, `sonos`, `cast`, `airplay`, `printer`, `router`, `media`, `storage` or `other`. */
   kind: string;
   vendor?: string;
   label: string;
@@ -156,10 +158,10 @@ export type NetworkIdentity = {
   addable: boolean;
   /**
    * The driver `automation-adopt` adds it with: a Shelly's, which it points at the broker, or one
-   * that asks the device itself (`network`, `ipp`, `snmp`, `cast`). A host offered as `network` is
-   * added as `snmp` when it answers SNMP.
+   * that asks the device itself (`network`, `ipp`, `snmp`, `cast`, `onvif`). A host offered as
+   * `network` is added as `snmp` when it answers SNMP; an `onvif` camera takes its user and password.
    */
-  adopt?: 'shelly' | 'shelly-gen1' | 'network' | 'ipp' | 'snmp' | 'cast';
+  adopt?: 'shelly' | 'shelly-gen1' | 'network' | 'ipp' | 'snmp' | 'cast' | 'onvif';
   /** What adding it does, or what it takes. */
   connect?: string;
 };
@@ -172,7 +174,7 @@ export type FoundDevice = NetworkIdentity & {
   mac?: string;
   names: string[];
   seen: string;
-  /** Its mDNS service types and SSDP device types. */
+  /** Its mDNS service types, SSDP device types and WS-Discovery types. */
   services: string[];
   /** Its name under /dev, when it is a device already. */
   device?: string;

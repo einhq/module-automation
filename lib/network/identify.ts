@@ -27,7 +27,34 @@ const MQTT_ONLY = new Set(['esphome', 'tasmota']);
 
 const SHELLY_GEN1_CONNECT = 'Turns on MQTT in the Shelly, pointed at EiN’s broker, and restarts it. Shelly’s cloud is turned off while MQTT is on.';
 
+/** The values of an ONVIF camera's scopes of one kind (`name`, `hardware`), decoded. */
+const scopes = (host: NetworkHost, kind: string): string[] =>
+  host.wsd.flatMap((each) => each.scopes).flatMap((scope) => {
+    const value = scope.match(new RegExp(`^onvif://www\\.onvif\\.org/${kind}/(.+)$`, 'i'))?.[1];
+    if (!value) return [];
+    try {
+      return [decodeURIComponent(value).replace(/_/g, ' ')];
+    } catch {
+      return [value];
+    }
+  });
+
 const PATTERNS: Pattern[] = [
+  {
+    // First: a camera announces a web page and more besides, which other patterns would take.
+    match: (host) => {
+      if (!host.wsd.some((each) => each.types.some((type) => /NetworkVideoTransmitter/.test(type)) || each.scopes.some((scope) => /^onvif:/i.test(scope)))) return undefined;
+      const [name] = scopes(host, 'name');
+      return { label: name ?? (host.names[0] ? stem(host.names[0]) : undefined), model: scopes(host, 'hardware')[0] };
+    },
+    identity: {
+      kind: 'camera',
+      class: 'camera',
+      addable: true,
+      adopt: 'onvif',
+      connect: 'Added with its user and password, it gives its streams to watch live, its motion and people seen, and its presets and moves where it turns.',
+    },
+  },
   {
     // Gen2 and later announce `_shelly._tcp` with gen, app (the model) and ver.
     match: (host) => {

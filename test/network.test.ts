@@ -14,11 +14,12 @@ import { decodeCastMessage, encodeCastMessage } from '../lib/network/cast.ts';
 import { changesOf, createPolledDrivers, reach } from '../lib/network/polled.ts';
 import { checkHttpConfig, controlAddress, expandUrl, fetchAnswer, intervalOf, parseControls, parseReadings, readAnswer } from '../lib/network/http.ts';
 import { ippResponse, startSnmpAgent } from './fixtures.ts';
+import { probeMatches } from '../sidecar/discovery.ts';
 import { snmpWalk } from '../lib/network/snmp.ts';
 
 const SEEN = '2026-11-09T08:00:00.000Z';
 
-const host = (ip: string, more: Partial<NetworkHost>): NetworkHost => ({ ip, names: [], seen: SEEN, mdns: [], ssdp: [], ...more });
+const host = (ip: string, more: Partial<NetworkHost>): NetworkHost => ({ ip, names: [], seen: SEEN, mdns: [], ssdp: [], wsd: [], ...more });
 
 const shellyPlus = host('192.168.1.20', {
   mac: 'a8:03:2a:b1:23:45',
@@ -90,6 +91,19 @@ Deno.test('identify', async (t) => {
   await t.step('a Cast speaker is added over Cast', () => {
     const speaker = host('192.168.1.26', { mdns: [{ type: '_googlecast._tcp', instance: 'Google-Home-Mini-1', txt: { fn: 'Kitchen speaker', md: 'Google Home Mini' } }] });
     assertEquals([identify(speaker).kind, identify(speaker).label, identify(speaker).adopt, identify(speaker).class], ['cast', 'Kitchen speaker', 'cast', 'speaker']);
+  });
+  await t.step('an ONVIF camera is added over ONVIF, named by its scopes, though it offers a web page too', () => {
+    const camera = host('192.168.1.27', {
+      mdns: [{ type: '_http._tcp', instance: 'IPC', port: 80, txt: {} }],
+      wsd: [{
+        endpoint: 'urn:uuid:5f5a69c2-e0ae-504f-829b-00000000a001',
+        types: ['dn:NetworkVideoTransmitter', 'tds:Device'],
+        scopes: ['onvif://www.onvif.org/type/video_encoder', 'onvif://www.onvif.org/name/Back%20yard', 'onvif://www.onvif.org/hardware/Dome_4'],
+        xaddrs: ['http://192.168.1.27/onvif/device_service'],
+      }],
+    });
+    const identity = identify(camera);
+    assertEquals([identity.kind, identity.class, identity.label, identity.model, identity.adopt], ['camera', 'camera', 'Back yard', 'Dome 4', 'onvif']);
   });
   await t.step('what no pattern knows is named from its UPnP description, and says whether it answers', () => {
     assertEquals(identify(unknown), {
@@ -412,4 +426,20 @@ Deno.test('the http driver reads what is named in an answer', async (t) => {
     assertEquals(asked.slice(1), ['http://192.0.2.32/cm?cmnd=Power%20OFF', 'http://192.0.2.32/cm?cmnd=Restart%201']);
     await assertRejects(() => http.write!(device, 'watts', 1), Error, 'watts cannot be set');
   });
+});
+
+Deno.test("the network listener reads an ONVIF camera's probe match", () => {
+  const answer = '<?xml version="1.0" encoding="UTF-8"?><SOAP-ENV:Envelope xmlns:SOAP-ENV="http://www.w3.org/2003/05/soap-envelope" ' +
+    'xmlns:wsa="http://schemas.xmlsoap.org/ws/2004/08/addressing" xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery"><SOAP-ENV:Body>' +
+    '<d:ProbeMatches><d:ProbeMatch><wsa:EndpointReference><wsa:Address>urn:uuid:5f5a69c2-e0ae-504f-829b-00000000a001</wsa:Address></wsa:EndpointReference>' +
+    '<d:Types>dn:NetworkVideoTransmitter tds:Device</d:Types><d:Scopes>onvif://www.onvif.org/name/Back%20yard\n onvif://www.onvif.org/hardware/Dome_4</d:Scopes>' +
+    '<d:XAddrs>http://192.168.1.27/onvif/device_service http://[fe80::1]/onvif/device_service</d:XAddrs><d:MetadataVersion>1</d:MetadataVersion>' +
+    '</d:ProbeMatch></d:ProbeMatches></SOAP-ENV:Body></SOAP-ENV:Envelope>';
+  assertEquals(probeMatches(answer), [{
+    endpoint: 'urn:uuid:5f5a69c2-e0ae-504f-829b-00000000a001',
+    types: ['dn:NetworkVideoTransmitter', 'tds:Device'],
+    scopes: ['onvif://www.onvif.org/name/Back%20yard', 'onvif://www.onvif.org/hardware/Dome_4'],
+    xaddrs: ['http://192.168.1.27/onvif/device_service', 'http://[fe80::1]/onvif/device_service'],
+  }]);
+  assertEquals(probeMatches('<d:ProbeMatches/>'), []);
 });

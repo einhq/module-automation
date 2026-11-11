@@ -53,7 +53,7 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
 
     await t.step('the bridge connects and registers a driver for each source', async () => {
       const status = await until('connected', () => admin.execJson<AutomationStatus>('automation-status'), (status) => status.connected);
-      assertEquals(status.drivers, ['ha-discovery', 'shelly', 'shelly-gen1', 'network', 'ipp', 'snmp', 'cast', 'http', 'rtsp']);
+      assertEquals(status.drivers, ['ha-discovery', 'shelly', 'shelly-gen1', 'network', 'ipp', 'snmp', 'cast', 'http', 'rtsp', 'onvif']);
       const drivers = await anna.execJson<DriverSummary[]>('devices --drivers');
       assertEquals(drivers.filter((driver) => driver.module === 'automation').map((driver) => [driver.name, driver.running]), [
         ['cast', true],
@@ -61,6 +61,7 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
         ['http', true],
         ['ipp', true],
         ['network', true],
+        ['onvif', true],
         ['rtsp', true],
         ['shelly', true],
         ['shelly-gen1', true],
@@ -237,6 +238,7 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
           names: ['shellyplug-s-a1b2c3d4e5f6.local'],
           seen,
           ssdp: [],
+          wsd: [],
           mdns: [{ type: '_http._tcp', instance: 'shellyplug-s-A1B2C3D4E5F6', txt: {} }],
         },
         a8032ab12345: {
@@ -244,6 +246,7 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
           names: ['shellyplus1pm-a8032ab12345.local'],
           seen,
           ssdp: [],
+          wsd: [],
           mdns: [{ type: '_shelly._tcp', instance: 'shellyplus1pm-a8032ab12345', txt: { gen: '2', app: 'Plus1PM' } }],
         },
       };
@@ -282,6 +285,7 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
           names: ['backup-box.local'],
           seen: new Date().toISOString(),
           ssdp: [],
+          wsd: [],
           mdns: [{ type: '_smb._tcp', instance: 'Backup box', port, txt: {} }],
         };
         broker.publish('ein/discovery/host/001132000001', JSON.stringify(nas), { retain: true });
@@ -316,6 +320,7 @@ Deno.test({ name: 'automation bridge', sanitizeResources: false, sanitizeOps: fa
           names: ['office-printer.local'],
           seen: new Date().toISOString(),
           ssdp: [],
+          wsd: [],
           mdns: [{ type: '_ipp._tcp', instance: 'Office printer', port: server.addr.port, txt: { rp: 'ipp/print', ty: 'Inkjet 7200' } }],
         };
         broker.publish('ein/discovery/host/office-printer', JSON.stringify(printer), { retain: true });
