@@ -142,7 +142,7 @@ const playThroughEin = (element: HTMLVideoElement, device: string, stream: strin
         buffer = source.addSourceBuffer(message.value);
         buffer.mode = 'segments';
         buffer.addEventListener('updateend', () => {
-          if (!buffer || buffer.updating) return;
+          if (closed || !buffer || buffer.updating) return;
           if (waiting.length) return append();
           const ranges = buffer.buffered;
           if (!ranges.length) return;
