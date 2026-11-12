@@ -23,7 +23,7 @@ import type { NetworkHosts } from '../network/found.ts';
 import { jpegSize, type Restreamer } from './restreamer.ts';
 
 /** The endpoints a camera's streams may be, largest first. */
-export const STREAM_ENDPOINTS = ['main', 'sub'] as const;
+const STREAM_ENDPOINTS = ['main', 'sub'] as const;
 
 const CHECK_EVERY_MS = 60_000;
 const SNAPSHOT_TIMEOUT_MS = 10_000;
@@ -43,7 +43,7 @@ export type CameraOptions = {
 export type CameraStream = { endpoint: (typeof STREAM_ENDPOINTS)[number]; label: string; address: string; info?: StreamInfo };
 
 /** Where a camera's still picture is, and who it is asked as. */
-export type CameraSnapshot = { url: string; user?: string; password?: string };
+type CameraSnapshot = { url: string; user?: string; password?: string };
 
 /** A kind of camera, as its driver asks it. */
 export type CameraKind = {

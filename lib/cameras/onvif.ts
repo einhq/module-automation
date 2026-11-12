@@ -30,10 +30,10 @@ const BASE64 = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-mes
 const TIMEOUT_MS = 10_000;
 
 /** What the camera says it is. */
-export type OnvifInfo = { manufacturer?: string; model?: string; firmware?: string; serial?: string };
+type OnvifInfo = { manufacturer?: string; model?: string; firmware?: string; serial?: string };
 
 /** Where the camera's services are; a service it lacks is unset. */
-export type OnvifServices = { media?: string; events?: string; ptz?: string };
+type OnvifServices = { media?: string; events?: string; ptz?: string };
 
 /** One of the camera's profiles: a stream it sends, and whether it turns. */
 export type OnvifProfile = {
@@ -76,7 +76,7 @@ const number = (text: string | undefined): number | undefined => {
 };
 
 /** The profiles in a `GetProfiles` answer that send video. */
-export const readProfiles = (body: XmlElement): OnvifProfile[] =>
+const readProfiles = (body: XmlElement): OnvifProfile[] =>
   findAll(body, 'Profiles').flatMap((profile) => {
     const token = profile.attrs.token;
     const encoder = child(profile, 'VideoEncoderConfiguration');
@@ -100,7 +100,7 @@ export const readProfiles = (body: XmlElement): OnvifProfile[] =>
   });
 
 /** The topics in a `GetEventProperties` answer, as paths without prefixes (`RuleEngine/CellMotionDetector/Motion`). */
-export const readTopics = (body: XmlElement): string[] => {
+const readTopics = (body: XmlElement): string[] => {
   const set = find(body, 'TopicSet');
   const out: string[] = [];
   const walk = (element: XmlElement, path: string[]) => {
@@ -115,7 +115,7 @@ export const readTopics = (body: XmlElement): string[] => {
 };
 
 /** The messages in a `PullMessages` answer. */
-export const readMessages = (body: XmlElement): OnvifMessage[] =>
+const readMessages = (body: XmlElement): OnvifMessage[] =>
   findAll(body, 'NotificationMessage').map((notification) => {
     const topic = (textOf(notification, 'Topic') ?? '').split('/').map((part) => part.slice(part.indexOf(':') + 1)).join('/');
     const outer = child(notification, 'Message');
@@ -126,7 +126,7 @@ export const readMessages = (body: XmlElement): OnvifMessage[] =>
   });
 
 /** The camera's clock, from a `GetSystemDateAndTime` answer; undefined when it does not say. */
-export const readClock = (body: XmlElement): Date | undefined => {
+const readClock = (body: XmlElement): Date | undefined => {
   const utc = find(body, 'UTCDateTime');
   const date = child(utc, 'Date');
   const time = child(utc, 'Time');
