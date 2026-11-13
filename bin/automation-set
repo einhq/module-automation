@@ -2,7 +2,8 @@
 /**
  * automation-set — write an automation's YAML, made when it is new. One with problems is refused,
  * saying what they are, unless `--draft`: then it is written, and not run until they are gone. Text that
- * is not YAML at all is never written.
+ * is not YAML at all is never written. `--dry-run` writes nothing and says its problems as
+ * automation-check does, endpoints the caller may not read or switch among them.
  *
  *   automation-set hall-light < hall-light.yaml       the YAML as given, comments and all
  *   automation-set hall-light --yaml "$text"
@@ -12,13 +13,13 @@
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import type { AutomationSetAnswer, AutomationSpec } from '@automation/api';
-import { problemLines, resolveAutomation, yamlOf } from '@automation/automation-commands';
+import { checkAutomation, problemLines, resolveAutomation, yamlOf } from '@automation/automation-commands';
 import { parseAutomationText, writeText } from '@automation/automation-files';
 import { engineState } from '@automation/state';
 
 const automationSet = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
-  const flags = parseArgs(cmd.args, { string: ['yaml', 'json'], boolean: ['draft'], unknown: collectUnknownFlags(unknown) });
+  const flags = parseArgs(cmd.args, { string: ['yaml', 'json'], boolean: ['draft', 'dry-run'], unknown: collectUnknownFlags(unknown) });
   if (await reportUnknownFlags(cmd, unknown)) return 1;
   try {
     const { name, path } = resolveAutomation(String(flags._[0] ?? ''));
@@ -40,8 +41,20 @@ const automationSet = async (cmd: Command): CmdReturn => {
       text = await cmd.stdin.text();
     }
     if (!text.endsWith('\n')) text += '\n';
-    const { spec, problems } = parseAutomationText(text);
+    const read = parseAutomationText(text);
+    const { spec } = read;
     const exists = await cmd.sys.vfs.exists(cmd.access, path);
+    if (flags['dry-run']) {
+      const { problems } = await checkAutomation(cmd, read, name);
+      const answer: AutomationSetAnswer = { name, path, written: false, created: false, problems };
+      if (cmd.json) await cmd.writeJSON(answer satisfies AutomationSetAnswer);
+      else {
+        await cmd.writeLn(problems.length ? `${name} has problems:` : `${name} has no problems`);
+        for (const line of problemLines(problems)) await cmd.writeLn(line);
+      }
+      return problems.length ? 1 : 0;
+    }
+    const { problems } = read;
     // A draft is a graph with problems; text that is not YAML at all is no graph, and is not written.
     const write = problems.length === 0 || (flags.draft === true && spec !== undefined);
     if (write) {
@@ -73,6 +86,12 @@ automationSet.spec = {
     { name: 'yaml', type: 'string' as const, description: 'the YAML, written as given' },
     { name: 'json', type: 'string' as const, description: 'its graph as JSON, written as YAML' },
     { name: 'draft', type: 'bool' as const, description: 'write it even with problems, unless it is not YAML; it is not run until they are gone' },
+    {
+      name: 'dry-run',
+      type: 'bool' as const,
+      dryRun: true,
+      description: 'write nothing: say what is wrong with it as automation-check does, devices you may not read or switch among it',
+    },
   ],
   examples: ['automation-set hall-light < hall-light.yaml', 'automation-set hall-light --yaml "$text" --draft'],
   returns: 'AutomationSetAnswer: name, path, written, created, problems',

@@ -93,7 +93,7 @@ Deno.test({ name: 'automation engine', sanitizeResources: false, sanitizeOps: fa
       assertEquals((await anna.exec('automation-new porch')).success, false);
     });
 
-    await t.step('one made with its slots set is checked first, and refused naming a control she cannot write', async () => {
+    await t.step('one made with its slots set, or tried with --dry-run, is checked first, naming a control she cannot write', async () => {
       const slots = '--from button-toggle --set button=porch-button/input-0 --set lamp=';
       const dry = await anna.execJson<AutomationSetAnswer>(`automation-new porch-lamp ${slots}hall-plug/switch-0 --dry-run`);
       assertEquals([dry.written, dry.problems], [false, []]);
@@ -101,6 +101,9 @@ Deno.test({ name: 'automation engine', sanitizeResources: false, sanitizeOps: fa
       const wrong = await anna.execJson<AutomationSetAnswer>(`automation-new porch-lamp ${slots}hall-plug/switch-9 --dry-run || true`);
       assertEquals(wrong.problems, [{ message: 'you may not write hall-plug/switch-9, or there is no such control' }]);
       assertEquals((await anna.exec(`automation-new porch-lamp ${slots}hall-plug/switch-9`)).success, false);
+      const yaml = quoted(PORCH.replace('hall-plug/switch-0', 'hall-plug/switch-9'));
+      const tried = await anna.execJson<AutomationSetAnswer>(`automation-set porch-lamp --dry-run --yaml ${yaml} || true`);
+      assertEquals([tried.written, tried.problems], [false, [{ message: 'you may not write hall-plug/switch-9, or there is no such control' }]]);
       assertEquals((await anna.exec('stat /etc/automations/porch-lamp.yaml')).success, false);
       const made = await anna.execJson<AutomationSetAnswer>(`automation-new porch-lamp ${slots}hall-plug/switch-0`);
       assertEquals([made.written, made.problems], [true, []]);
