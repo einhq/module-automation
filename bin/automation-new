@@ -63,7 +63,7 @@ const automationNew = async (cmd: Command): CmdReturn => {
     }
     const write = !flags['dry-run'] && (sets.length === 0 || problems.length === 0);
     if (write) await writeText(cmd.sys.vfs, cmd.access, path, text);
-    const answer: AutomationSetAnswer = { name, path, written: write, created: write, problems, ...(flags['dry-run'] ? { text } : {}) };
+    const answer: AutomationSetAnswer = { name, path, written: write, created: write, problems };
     if (cmd.json) {
       await cmd.writeJSON(answer satisfies AutomationSetAnswer);
     } else if (flags['dry-run']) {
@@ -97,7 +97,7 @@ automationNew.spec = {
       description: 'a slot of the starting point, <slot>=<value>: an endpoint as <device>/<endpoint>, none to leave an optional one out; --examples lists them',
     },
     { name: 'description', type: 'string' as const, description: 'what it does, a sentence (the starting point says it when not given)' },
-    { name: 'dry-run', type: 'bool' as const, dryRun: true, description: 'write nothing: print the YAML it would write and what is wrong with it' },
+    { name: 'dry-run', type: 'bool' as const, dryRun: true, description: 'write nothing: say what is wrong with it, and in text the YAML it would write' },
     { name: 'examples', type: 'bool' as const, dryRun: true, description: 'list the starting points and their slots' },
   ],
   examples: [
@@ -105,7 +105,7 @@ automationNew.spec = {
     'automation-new hall-light --from motion-light --set motion=hall-sensor/motion --set lamp=hall-lamp/switch-0 --set light-level=none --dry-run',
     'automation-new --examples',
   ],
-  returns: 'AutomationSetAnswer: name, path, written, created, problems, and with --dry-run the YAML as text',
+  returns: 'AutomationSetAnswer: name, path, written, created, problems',
 };
 
 export default automationNew;
