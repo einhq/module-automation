@@ -159,7 +159,8 @@ const ENDPOINT = /^[^/\s]+\/[^/\s]+$/;
  * its path under /dev, a number is written as one, and `none` takes out the nodes the slot names,
  * with the wires into them, or else the fields it sets. The description is the one given, or the
  * starting point's own once a slot is set, since its YAML's names the stand-in devices. The
- * endpoint slots left unset are problems: their stand-ins are no household's devices.
+ * endpoint slots left unset are problems, unless another slot's `none` took their nodes out: their
+ * stand-ins are no household's devices.
  */
 export const fillExample = (example: Example, sets: string[], description?: string): { spec: AutomationSpec; problems: AutomationProblem[] } => {
   const spec = parse(example.yaml) as AutomationSpec;
@@ -208,7 +209,7 @@ export const fillExample = (example: Example, sets: string[], description?: stri
   if (description !== undefined) spec.description = description;
   else if (given.size) spec.description = example.description;
   const problems = given.size
-    ? slots.filter((slot) => (slot.kind === 'reading' || slot.kind === 'control') && !given.has(slot.name))
+    ? slots.filter((slot) => (slot.kind === 'reading' || slot.kind === 'control') && !given.has(slot.name) && slot.sets.some((field) => field.split('.')[0] in nodes))
       .map((slot) => ({ message: `${slot.name} is not set: --set ${slot.name}=<device>/<endpoint>${slot.drops ? ', or none' : ''}` }))
     : [];
   return { spec, problems };

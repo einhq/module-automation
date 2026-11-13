@@ -16,7 +16,7 @@ AUTOMATIONS: what the house does by itself — "turn on the hall lamp when there
 2. When one of these starting points does what was asked, all of it and no more, make it with automation-new and its slots; it wires every node itself:
    - motion-light, a lamp on at motion: motion, lamp, light-level, dark-below, off-after. When the user says dark, light-level is the endpoint that reads the light (illuminance, lux) and the lamp goes on only in the dark; light-level=none is for a lamp on at motion at any light
    - button-toggle, a button switching a lamp: button, lamp, press
-   - heater, a heater switched on below one temperature and off above another: temperature, heater, on-below, off-above, away (none when not named)
+   - heater, a heater switched on below one temperature and off above another: temperature, heater, on-below, off-above, away (none when not named). Only one of the two asked for: the other is none
    - morning, something switched at a time of day: lamp, at, days, value
    - dusk-to-dawn, a lamp on from sunset until sunrise: lamp, location, from, until
    - inbox, each file coming into a folder moved to another: folder, match, to

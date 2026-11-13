@@ -68,6 +68,17 @@ Deno.test('starting points: none takes out an optional sensor with its wires, or
   assertEquals('is' in every.nodes.press, false);
 });
 
+Deno.test('starting points: a heater only switched off leaves out what would switch it on, and runs', async () => {
+  const { spec, problems } = fillExample(example('heater'), ['temperature=hall-sensor/temperature', 'heater=heater-plug/switch-0', 'on-below=none', 'off-above=24']);
+  assertEquals(problems, []);
+  assertEquals(Object.keys(spec.nodes).sort(), ['heater-off', 'temperature', 'warm', 'warm-a-while']);
+  const sim = simulationOf(spec);
+  sim.feed('hall-sensor/temperature', 25);
+  sim.advance(5 * MIN);
+  await sim.settled();
+  assertEquals(said(sim, 'control'), ['would set heater-plug/switch-0 to off']);
+});
+
 Deno.test('starting points: a folder in a line is quoted for the shell', () => {
   const { spec } = fillExample(example('inbox'), ['folder=/home/anna/scans', "to=/home/anna/Anna's papers"]);
   assertStringIncludes(String(spec.nodes['file-it'].run), `mv "$VALUE" '/home/anna/Anna'\\''s papers'/`);

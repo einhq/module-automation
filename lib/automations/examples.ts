@@ -98,8 +98,20 @@ nodes:
     slots: [
       { name: 'temperature', about: 'the thermometer, <device>/<endpoint>', kind: 'reading', sets: ['temperature.endpoint'] },
       { name: 'heater', about: 'the heater switched, <device>/<endpoint>', kind: 'control', sets: ['heater-on.endpoint', 'heater-off.endpoint'] },
-      { name: 'on-below', about: 'the heater on once it has been colder than this a while (19)', kind: 'number', sets: ['cold.below'] },
-      { name: 'off-above', about: 'the heater off once it has been warmer than this a while (21)', kind: 'number', sets: ['warm.above'] },
+      {
+        name: 'on-below',
+        about: 'the heater on once it has been colder than this a while; none never to switch it on (19)',
+        kind: 'number',
+        sets: ['cold.below'],
+        drops: ['cold', 'cold-a-while', 'heat', 'heater-on', 'away', 'home'],
+      },
+      {
+        name: 'off-above',
+        about: 'the heater off once it has been warmer than this a while; none never to switch it off (21)',
+        kind: 'number',
+        sets: ['warm.above'],
+        drops: ['warm', 'warm-a-while', 'heater-off'],
+      },
       {
         name: 'away',
         about: 'a switch that is on while no one is home, <device>/<endpoint>; none to heat whoever is home',
