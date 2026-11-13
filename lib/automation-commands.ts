@@ -108,12 +108,21 @@ export const yamlOf = (spec: AutomationSpec): string => stringify(canonicalSpec(
  * What is wrong with an automation as the caller would run it, and what each of its nodes would say
  * now: the latest readings the caller may read sent through it, no action run. An endpoint the
  * caller may not read, a control they may not write, a folder they may not read, or an event they
- * may not raise is a problem, as it is for the engine when the caller owns it.
+ * may not raise is a problem, as it is for the engine when the caller owns it. So is a node left
+ * out of the flow, which the engine runs as it is: one that is no action and sends nowhere, or one
+ * nothing sends to that only acts on what comes in.
  */
 export const checkAutomation = async (cmd: Command, read: ReturnType<typeof parseAutomationText>, name?: string): Promise<AutomationCheck> => {
   const problems = [...read.problems];
   const check: AutomationCheck = { ...(name ? { name } : {}), problems, nodes: {}, endpoints: [] };
   if (!read.automation) return check;
+  for (const [id, node] of read.automation.nodes) {
+    const sends = Object.values(node.wires).some((targets) => targets.length > 0);
+    if (node.kind.group !== 'action' && node.outputs.length && !sends) problems.push({ node: id, message: 'sends nowhere: wire it to what should act on what it says' });
+    if (node.kind.group !== 'input' && node.kind.input && !read.automation.senders.get(id)?.length) {
+      problems.push({ node: id, message: 'nothing sends to it: wire into it what it should act on' });
+    }
+  }
   const { endpoints, controls, devices, folders, raises } = readsOf(read.automation);
   for (const folder of folders) {
     if (!(await folderReadable(cmd.sys.vfs, cmd.access, folder))) problems.push({ message: `you may not read the folder ${folder}, or there is none` });

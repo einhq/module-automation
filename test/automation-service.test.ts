@@ -97,7 +97,10 @@ Deno.test({ name: 'automation engine', sanitizeResources: false, sanitizeOps: fa
       const slots = '--from button-toggle --set button=porch-button/input-0 --set lamp=';
       const dry = await anna.execJson<AutomationSetAnswer>(`automation-new porch-lamp ${slots}hall-plug/switch-0 --dry-run`);
       assertEquals([dry.written, dry.problems], [false, []]);
-      assertStringIncludes(dry.text!, 'endpoint: hall-plug/switch-0');
+      assertStringIncludes(await anna.execString(`JSON_OUTPUT=0 automation-new porch-lamp ${slots}hall-plug/switch-0 --dry-run`), 'endpoint: hall-plug/switch-0');
+      const unwired = quoted(PORCH.replace(', to: [toggle, note]', ', to: [note]'));
+      const loose = await anna.execJson<AutomationSetAnswer>(`automation-set porch-lamp --dry-run --yaml ${unwired} || true`);
+      assertEquals(loose.problems, [{ node: 'toggle', message: 'nothing sends to it: wire into it what it should act on' }]);
       const wrong = await anna.execJson<AutomationSetAnswer>(`automation-new porch-lamp ${slots}hall-plug/switch-9 --dry-run || true`);
       assertEquals(wrong.problems, [{ message: 'you may not write hall-plug/switch-9, or there is no such control' }]);
       assertEquals((await anna.exec(`automation-new porch-lamp ${slots}hall-plug/switch-9`)).success, false);
