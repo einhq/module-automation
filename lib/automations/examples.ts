@@ -1,11 +1,27 @@
 /**
  * Starting points for a new automation (`automation-new --from <name>`, the editor's New), each
- * one a working automation once its devices are changed to the household's own.
+ * one a working automation once its devices are changed to the household's own: by hand, or by its
+ * slots (`--set lamp=porch-lamp/switch-0`).
  *
  * Import-free, so a page offers them as the command does.
  */
 
-type Example = { name: string; label: string; description: string; yaml: string };
+/** A setting of a starting point that `automation-new --set <name>=<value>` fills. */
+type Slot = {
+  name: string;
+  /** What it is, as `automation-new --examples` says it. */
+  about: string;
+  /** What it takes: a readable endpoint, a writable control, a number, or a word (a time, a duration, a folder). */
+  kind: 'reading' | 'control' | 'number' | 'text';
+  /** The fields it is written to, as `<node>.<setting>`. */
+  sets: string[];
+  /** For a `shell` node's `run`: the line, with `{}` where the value goes, quoted for the shell. */
+  line?: string;
+  /** The nodes taken out, with the wires into them, when it is set to `none`; with none, `none` takes the fields out. */
+  drops?: string[];
+};
+
+export type Example = { name: string; label: string; description: string; yaml: string; slots?: Slot[] };
 
 export const EXAMPLES: readonly Example[] = [
   {
@@ -32,6 +48,19 @@ nodes:
   lamp-on: {type: control, endpoint: hall-lamp/switch-0, value: on, pos: [720, 0]}
   lamp-off: {type: control, endpoint: hall-lamp/switch-0, value: off, pos: [720, 140]}
 `,
+    slots: [
+      { name: 'motion', about: 'the motion sensor, <device>/<endpoint>', kind: 'reading', sets: ['motion.endpoint'] },
+      { name: 'lamp', about: 'the lamp switched, <device>/<endpoint>', kind: 'control', sets: ['lamp-on.endpoint', 'lamp-off.endpoint'] },
+      {
+        name: 'light-level',
+        about: 'the light level that says it is dark, <device>/<endpoint>; none to switch at any light',
+        kind: 'reading',
+        sets: ['lux.endpoint'],
+        drops: ['lux', 'dark'],
+      },
+      { name: 'dark-below', about: 'how low the light level is when it is dark (30)', kind: 'number', sets: ['dark.below'] },
+      { name: 'off-after', about: 'how long after the motion ends the lamp goes off (5m)', kind: 'text', sets: ['linger.off-after'] },
+    ],
   },
   {
     name: 'button-toggle',
@@ -43,6 +72,11 @@ nodes:
   try-it: {type: button, label: Try it, pos: [0, 120], to: [toggle]}
   toggle: {type: control, endpoint: hall-lamp/switch-0, value: toggle, pos: [260, 60]}
 `,
+    slots: [
+      { name: 'button', about: 'the button, <device>/<endpoint>', kind: 'reading', sets: ['press.endpoint'] },
+      { name: 'lamp', about: 'the lamp switched, <device>/<endpoint>', kind: 'control', sets: ['toggle.endpoint'] },
+      { name: 'press', about: 'which press: single, double or long; none for every press (single)', kind: 'text', sets: ['press.is'] },
+    ],
   },
   {
     name: 'heater',
@@ -61,6 +95,19 @@ nodes:
   heater-on: {type: control, endpoint: heater-plug/switch-0, value: on, pos: [960, 40]}
   heater-off: {type: control, endpoint: heater-plug/switch-0, value: off, pos: [960, 240]}
 `,
+    slots: [
+      { name: 'temperature', about: 'the thermometer, <device>/<endpoint>', kind: 'reading', sets: ['temperature.endpoint'] },
+      { name: 'heater', about: 'the heater switched, <device>/<endpoint>', kind: 'control', sets: ['heater-on.endpoint', 'heater-off.endpoint'] },
+      { name: 'on-below', about: 'the heater on once it has been colder than this a while (19)', kind: 'number', sets: ['cold.below'] },
+      { name: 'off-above', about: 'the heater off once it has been warmer than this a while (21)', kind: 'number', sets: ['warm.above'] },
+      {
+        name: 'away',
+        about: 'a switch that is on while no one is home, <device>/<endpoint>; none to heat whoever is home',
+        kind: 'reading',
+        sets: ['away.endpoint'],
+        drops: ['away', 'home'],
+      },
+    ],
   },
   {
     name: 'morning',
@@ -73,6 +120,12 @@ nodes:
   note: {type: shell, run: 'echo "morning at $VALUE"', pos: [260, 120], to: [shown]}
   shown: {type: debug, pos: [520, 120]}
 `,
+    slots: [
+      { name: 'lamp', about: 'the lamp switched on, <device>/<endpoint>', kind: 'control', sets: ['lamp-on.endpoint'] },
+      { name: 'at', about: 'the time of day, HH:MM (06:30)', kind: 'text', sets: ['morning.at'] },
+      { name: 'days', about: 'which days: weekdays, weekends, or some of mon,tue,…; none for every day (weekdays)', kind: 'text', sets: ['morning.days'] },
+      { name: 'value', about: 'what is written to it: on, off, toggle or a number (on)', kind: 'text', sets: ['lamp-on.value'] },
+    ],
   },
   {
     name: 'inbox',
@@ -84,6 +137,11 @@ nodes:
   file-it: {type: shell, run: 'mv "$VALUE" /home/anna/documents/ && echo "filed $VALUE"', pos: [260, 0], to: [shown]}
   shown: {type: debug, pos: [520, 0]}
 `,
+    slots: [
+      { name: 'folder', about: 'the folder watched', kind: 'text', sets: ['scan.folder'] },
+      { name: 'match', about: 'which files, as a pattern; none for every file (*.pdf)', kind: 'text', sets: ['scan.match'] },
+      { name: 'to', about: 'the folder each is moved to', kind: 'text', sets: ['file-it.run'], line: 'mv "$VALUE" {}/ && echo "filed $VALUE"' },
+    ],
   },
   {
     name: 'dusk-to-dawn',
@@ -95,6 +153,12 @@ nodes:
   lamp-on: {type: control, endpoint: porch-lamp/switch-0, value: on, pos: [260, 0]}
   lamp-off: {type: control, endpoint: porch-lamp/switch-0, value: off, pos: [260, 120]}
 `,
+    slots: [
+      { name: 'lamp', about: 'the lamp switched, <device>/<endpoint>', kind: 'control', sets: ['lamp-on.endpoint', 'lamp-off.endpoint'] },
+      { name: 'location', about: 'where the sun is reckoned, <latitude>, <longitude>', kind: 'text', sets: ['dark.location'] },
+      { name: 'from', about: 'on from: sunset, dusk, a time, or one with an offset such as sunset-30m (sunset)', kind: 'text', sets: ['dark.from'] },
+      { name: 'until', about: 'off at: sunrise, dawn, a time, or one with an offset (sunrise)', kind: 'text', sets: ['dark.until'] },
+    ],
   },
   {
     name: 'tour',

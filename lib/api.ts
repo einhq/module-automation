@@ -97,8 +97,8 @@ export type AutomationDetail = AutomationSummary & {
   spec?: AutomationSpec;
 };
 
-/** `automation-set`: whether it was written, and what is wrong with it. */
-export type AutomationSetAnswer = { name: string; path: string; written: boolean; created: boolean; problems: AutomationProblem[] };
+/** `automation-set` and `automation-new`: whether it was written, and what is wrong with it; with `--dry-run`, the YAML it would write. */
+export type AutomationSetAnswer = { name: string; path: string; written: boolean; created: boolean; problems: AutomationProblem[]; text?: string };
 
 /** `automation-status <name>`: what each node of a running automation last did. */
 export type AutomationRunStatus = { name: string; running: boolean; problems: AutomationProblem[]; nodes: Record<string, AutomationNodeStatus> };

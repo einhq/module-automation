@@ -12,14 +12,9 @@
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
 import type { AutomationSetAnswer, AutomationSpec } from '@automation/api';
-import { problemLines, resolveAutomation } from '@automation/automation-commands';
+import { problemLines, resolveAutomation, yamlOf } from '@automation/automation-commands';
 import { parseAutomationText, writeText } from '@automation/automation-files';
-import { canonicalSpec } from '@automation/automations/graph';
-import { stringify } from '@std/yaml';
 import { engineState } from '@automation/state';
-
-/** A graph as YAML, each node on a line of its own. */
-const yamlOf = (spec: AutomationSpec): string => stringify(canonicalSpec(spec), { lineWidth: -1, flowLevel: 2 });
 
 const automationSet = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];

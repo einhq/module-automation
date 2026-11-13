@@ -1,26 +1,45 @@
 #!ts
 /**
- * automation-new — make an automation, empty or from a starting point.
+ * automation-new — make an automation, empty or from a starting point, its slots set to the
+ * household's devices. One made with slots set is checked as automation-check does, and refused
+ * with problems; `--dry-run` says what it would write and what is wrong with it, writing nothing.
  *
  *   automation-new hall-light                      an empty one, /etc/automations/hall-light.yaml
- *   automation-new hall-light --from motion-light  from a starting point
- *   automation-new --examples                      the starting points
+ *   automation-new hall-light --from motion-light  from a starting point, its stand-in devices to change
+ *   automation-new hall-light --from motion-light --set motion=hall-sensor/motion --set lamp=hall-lamp/switch-0 --set light-level=none
+ *   automation-new --examples                      the starting points and their slots
  */
 
 import type { CmdReturn, Command } from '@ein/client';
 import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
-import type { AutomationSetAnswer } from '@automation/api';
-import { resolveAutomation } from '@automation/automation-commands';
+import type { AutomationProblem, AutomationSetAnswer } from '@automation/api';
+import { checkAutomation, fillExample, problemLines, resolveAutomation, yamlOf } from '@automation/automation-commands';
 import { parseAutomationText, writeText } from '@automation/automation-files';
 import { EXAMPLES } from '@automation/automations/examples';
 
 const automationNew = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
-  const flags = parseArgs(cmd.args, { string: ['from'], boolean: ['examples'], unknown: collectUnknownFlags(unknown) });
+  const flags = parseArgs(cmd.args, {
+    string: ['from', 'set', 'description'],
+    collect: ['set'],
+    boolean: ['examples', 'dry-run'],
+    unknown: collectUnknownFlags(unknown),
+  });
   if (await reportUnknownFlags(cmd, unknown)) return 1;
   if (flags.examples) {
-    if (cmd.json) await cmd.writeJSON(EXAMPLES.map(({ name, label, description }) => ({ name, label, description })));
-    else for (const example of EXAMPLES) await cmd.writeLn(`${example.name}\t${example.description}`);
+    if (cmd.json) {
+      await cmd.writeJSON(EXAMPLES.map(({ name, label, description, slots }) => ({
+        name,
+        label,
+        description,
+        slots: (slots ?? []).map(({ name, about, kind }) => ({ name, about, kind })),
+      })));
+    } else {
+      for (const example of EXAMPLES) {
+        await cmd.writeLn(`${example.name}\t${example.description}`);
+        for (const slot of example.slots ?? []) await cmd.writeLn(`  --set ${slot.name}=…\t${slot.about}`);
+      }
+    }
     return 0;
   }
   try {
@@ -29,11 +48,34 @@ const automationNew = async (cmd: Command): CmdReturn => {
     const example = EXAMPLES.find((each) => each.name === (flags.from ?? 'empty'));
     if (!example) throw new Error(`there is no starting point ${flags.from}; there are ${EXAMPLES.map((each) => each.name).join(', ')}`);
     if (await cmd.sys.vfs.exists(cmd.access, path)) throw new Error(`${name} exists already: automation-set ${name} changes it`);
-    await writeText(cmd.sys.vfs, cmd.access, path, example.yaml);
-    const answer: AutomationSetAnswer = { name, path, written: true, created: true, problems: parseAutomationText(example.yaml).problems };
-    if (cmd.json) await cmd.writeJSON(answer satisfies AutomationSetAnswer);
-    else await cmd.writeLn(`made ${path}${example.name === 'empty' ? '' : ` from ${example.name}: change its devices to yours`}`);
-    return 0;
+    const sets = ([] as unknown[]).concat(flags.set ?? []).map(String);
+    const description = flags.description === undefined ? undefined : String(flags.description);
+    let text = example.yaml;
+    let problems: AutomationProblem[];
+    if (sets.length || description !== undefined) {
+      const filled = fillExample(example, sets, description);
+      text = yamlOf(filled.spec);
+      problems = [...filled.problems];
+      // With slots set it is meant to run as it is, so it is checked as its owner would run it.
+      problems.push(...(sets.length ? (await checkAutomation(cmd, parseAutomationText(text), name)).problems : parseAutomationText(text).problems));
+    } else {
+      problems = parseAutomationText(text).problems;
+    }
+    const write = !flags['dry-run'] && (sets.length === 0 || problems.length === 0);
+    if (write) await writeText(cmd.sys.vfs, cmd.access, path, text);
+    const answer: AutomationSetAnswer = { name, path, written: write, created: write, problems, ...(flags['dry-run'] ? { text } : {}) };
+    if (cmd.json) {
+      await cmd.writeJSON(answer satisfies AutomationSetAnswer);
+    } else if (flags['dry-run']) {
+      await cmd.write(text);
+      await cmd.writeLn(problems.length ? `${name} has problems:` : `${name} has no problems`);
+      for (const line of problemLines(problems)) await cmd.writeLn(line);
+    } else if (write) {
+      await cmd.writeLn(`made ${path}${example.name === 'empty' ? '' : ` from ${example.name}${sets.length ? '' : ': change its devices to yours'}`}`);
+    } else {
+      await cmd.writeError(`automation-new: ${name} not made:\n${problemLines(problems).join('\n')}\n`);
+    }
+    return problems.length && (flags['dry-run'] || !write) ? 1 : 0;
   } catch (error) {
     await cmd.writeError(`automation-new: ${error instanceof Error ? error.message : error}\n`);
     return 1;
@@ -43,14 +85,27 @@ const automationNew = async (cmd: Command): CmdReturn => {
 automationNew.spec = {
   name: 'automation-new',
   effect: 'write' as const,
-  description: 'Make an automation under /etc/automations, empty or from a starting point (members of the automation group)',
+  description:
+    'Make an automation under /etc/automations, empty or from a starting point with its slots set to your devices; one with slots set is checked, and refused with problems (members of the automation group)',
   args: [{ name: 'name', type: 'string' as const, description: 'its name: letters, digits, ., - and _' }],
   flags: [
-    { name: 'from', type: 'string' as const, description: 'a starting point: motion-light, button-toggle, heater, morning' },
-    { name: 'examples', type: 'bool' as const, description: 'list the starting points', writes: false },
+    { name: 'from', type: 'string' as const, description: `a starting point: ${EXAMPLES.map((each) => each.name).join(', ')}` },
+    {
+      name: 'set',
+      type: 'string' as const,
+      repeatable: true,
+      description: 'a slot of the starting point, <slot>=<value>: an endpoint as <device>/<endpoint>, none to leave an optional one out; --examples lists them',
+    },
+    { name: 'description', type: 'string' as const, description: 'what it does, a sentence (the starting point says it when not given)' },
+    { name: 'dry-run', type: 'bool' as const, dryRun: true, description: 'write nothing: print the YAML it would write and what is wrong with it' },
+    { name: 'examples', type: 'bool' as const, dryRun: true, description: 'list the starting points and their slots' },
   ],
-  examples: ['automation-new hall-light --from motion-light', 'automation-new --examples'],
-  returns: 'AutomationSetAnswer: name, path, written, created, problems',
+  examples: [
+    'automation-new hall-light --from motion-light',
+    'automation-new hall-light --from motion-light --set motion=hall-sensor/motion --set lamp=hall-lamp/switch-0 --set light-level=none --dry-run',
+    'automation-new --examples',
+  ],
+  returns: 'AutomationSetAnswer: name, path, written, created, problems, and with --dry-run the YAML as text',
 };
 
 export default automationNew;

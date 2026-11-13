@@ -10,58 +10,24 @@
  */
 
 import type { CmdReturn, Command } from '@ein/client';
-import { ADMIN_ACCESS, collectUnknownFlags, EVENTS_NODE_PATH, parseArgs, reportUnknownFlags, verifyAccess } from '@ein/client';
-import type { AutomationCheck, AutomationProblem, AutomationValue } from '@automation/api';
-import { problemLines, readAs, resolveAutomation } from '@automation/automation-commands';
-import { endpointState, folderReadable, localTime, onlineOf, parseAutomationText } from '@automation/automation-files';
-import { AutomationEngine, readsOf } from '@automation/automations/engine';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { AutomationCheck } from '@automation/api';
+import { checkAutomation, problemLines, readAs, resolveAutomation } from '@automation/automation-commands';
+import { parseAutomationText } from '@automation/automation-files';
 
 const automationCheck = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
   const flags = parseArgs(cmd.args, { string: ['yaml'], unknown: collectUnknownFlags(unknown) });
   if (await reportUnknownFlags(cmd, unknown)) return 1;
   try {
-    let name: string | undefined;
-    let read: ReturnType<typeof parseAutomationText>;
-    let problems: AutomationProblem[];
+    let check: AutomationCheck;
     if (flags.yaml !== undefined) {
-      read = parseAutomationText(flags.yaml);
-      problems = [...read.problems];
+      check = await checkAutomation(cmd, parseAutomationText(flags.yaml));
     } else {
       const file = await readAs(cmd, resolveAutomation(String(flags._[0] ?? '')).path);
-      name = file.name;
-      read = file;
-      problems = [...file.problems];
+      check = await checkAutomation(cmd, file, file.name);
     }
-    const check: AutomationCheck = { ...(name ? { name } : {}), problems, nodes: {}, endpoints: [] };
-    if (read.automation) {
-      const { endpoints, controls, devices, folders, raises } = readsOf(read.automation);
-      for (const folder of folders) {
-        if (!(await folderReadable(cmd.sys.vfs, cmd.access, folder))) problems.push({ message: `you may not read the folder ${folder}, or there is none` });
-      }
-      if (raises.length) {
-        const events = await cmd.sys.vfs.get(ADMIN_ACCESS, EVENTS_NODE_PATH).catch(() => undefined);
-        if (!events || !verifyAccess(cmd.access, events.props, 'w')) problems.push({ message: `you may not raise events: only the administrator writes ${EVENTS_NODE_PATH}` });
-      }
-      const values = new Map<string, { value: AutomationValue; at: number }>();
-      for (const endpoint of new Set([...endpoints, ...controls])) {
-        const state = await endpointState(cmd.sys.vfs, cmd.access, endpoint);
-        // As the engine would refuse it, for whoever writes it: they are its owner.
-        if (endpoints.includes(endpoint) && !state.readable) problems.push({ message: `you may not read ${endpoint}, or there is no such endpoint` });
-        if (controls.includes(endpoint) && !state.writable) problems.push({ message: `you may not write ${endpoint}, or there is no such control` });
-        check.endpoints.push({
-          endpoint,
-          readable: state.readable,
-          ...(state.value !== undefined ? { value: state.value } : {}),
-          ...(state.at ? { at: new Date(state.at).toISOString() } : {}),
-        });
-        if (state.value !== undefined && state.at !== undefined) values.set(endpoint, { value: state.value, at: state.at });
-      }
-      const engine = new AutomationEngine(name ?? 'draft', read.automation, { schedule: () => () => {}, now: Date.now, localTime, act: () => Promise.resolve() });
-      engine.prime({ values, online: await onlineOf(cmd.sys.vfs, cmd.access, devices) });
-      check.nodes = engine.status();
-      engine.stop();
-    }
+    const { name, problems } = check;
     if (cmd.json) {
       await cmd.writeJSON(check satisfies AutomationCheck);
     } else {
