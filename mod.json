@@ -212,6 +212,8 @@
     "routes": {
       "/automations": "ui/pages/automations.tsx",
       "/camera-live": "ui/pages/camera-live.tsx",
+      "/cards/automation/camera": "ui/cards/camera.tsx",
+      "/cards/automation/button": "ui/cards/button.tsx",
       "/automations/:name": "ui/pages/automations.tsx",
       "/found-devices": "ui/pages/found-devices.tsx",
       "/found-devices-button": "ui/pages/found-devices-button.tsx",

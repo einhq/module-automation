@@ -1,0 +1,66 @@
+[
+  {
+    "name": "camera",
+    "label": "Camera",
+    "description": "A camera's picture filling the card, new every few seconds or live; tap it to watch live for a while.",
+    "icon": "video",
+    "color": "red",
+    "route": "/cards/automation/camera",
+    "frame": "plain",
+    "size": [6, 4],
+    "min": [2, 2],
+    "params": {
+      "type": "object",
+      "required": ["device"],
+      "properties": {
+        "device": { "type": "string", "title": "Camera", "x-choices": { "command": "devices --class camera", "value": "name", "label": "label" } },
+        "stream": {
+          "type": "string",
+          "title": "Stream",
+          "description": "Which of its streams to show; its first, the largest, when left out.",
+          "x-choices": { "command": "device-show {device}", "items": "endpointList", "where": { "type": "stream" }, "value": "name", "label": "label" }
+        },
+        "live": { "type": "boolean", "title": "Always live", "description": "Play it live all the time, not only when tapped.", "default": false },
+        "every": { "type": "integer", "title": "Seconds between pictures", "default": 10, "minimum": 2, "maximum": 600 },
+        "fit": {
+          "type": "string",
+          "title": "Picture",
+          "default": "cover",
+          "oneOf": [{ "const": "cover", "title": "Fill the card" }, { "const": "contain", "title": "Show all of it" }]
+        },
+        "label": { "type": "string", "title": "Label", "description": "What to call it in place of its own name." }
+      }
+    }
+  },
+  {
+    "name": "button",
+    "label": "Button",
+    "description": "One large button for a device's control: press it, switch it on and off, or set it to a value such as a mode or a scene.",
+    "icon": "hand-finger",
+    "color": "orange",
+    "route": "/cards/automation/button",
+    "frame": "plain",
+    "size": [2, 2],
+    "min": [1, 1],
+    "params": {
+      "type": "object",
+      "required": ["device", "endpoint"],
+      "properties": {
+        "device": { "type": "string", "title": "Device", "x-choices": { "command": "devices", "value": "name", "label": "label" } },
+        "endpoint": {
+          "type": "string",
+          "title": "Control",
+          "x-choices": { "command": "device-show {device}", "items": "endpointList", "where": { "type": "control" }, "value": "name", "label": "label" }
+        },
+        "value": {
+          "type": "string",
+          "title": "Sets it to",
+          "description": "What a press writes, such as on, eco or 21; the button is lit while the control is that. Left out, a press presses a button, and switches on and off to the other."
+        },
+        "label": { "type": "string", "title": "Label", "description": "What the button says in place of the control's name." },
+        "icon": { "type": "string", "title": "Icon", "description": "A Tabler icon's name, such as bell, bulb or garage." },
+        "confirm": { "type": "boolean", "title": "Ask first", "description": "A first press only asks for a second, for a door or a gate.", "default": false }
+      }
+    }
+  }
+]
