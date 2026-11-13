@@ -126,8 +126,6 @@ export default function ButtonCard() {
     ? endpoint.requested ? `Pressed ${agoText(endpoint.requested.at)}` : 'Not pressed yet'
     : action.kind === 'toggle'
     ? now === true ? 'On' : now === false ? 'Off' : 'Not known'
-    : lit
-    ? 'On'
     : now === undefined
     ? 'Not known'
     : readingText(now, endpoint.unit);

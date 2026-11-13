@@ -17,6 +17,12 @@ type MediaSourceClass = typeof MediaSource;
 /** Where a page's media comes from: Safari on an iPhone has only ManagedMediaSource. */
 const mediaSourceClass = (): MediaSourceClass | undefined => (globalThis as unknown as { ManagedMediaSource?: MediaSourceClass }).ManagedMediaSource ?? globalThis.MediaSource;
 
+/** The restreamer's error as a person reads it: a codec the browser does not play is named. */
+const reasonOf = (error: string): string => {
+  const codec = /codecs not matched: video:(\w+)/.exec(error)?.[1];
+  return codec ? `this browser does not play the camera's ${codec} video` : error;
+};
+
 export type LiveStatus = { state: 'connecting' | 'playing' | 'ended' | 'failed'; reason?: string };
 
 /**
@@ -70,7 +76,7 @@ export function LivePlayer({ device, stream, onStatus, controls, style }: {
       socket.onmessage = (event) => {
         if (typeof event.data === 'string') {
           const message = JSON.parse(event.data) as { type: string; value: string };
-          if (message.type === 'error') onStatus({ state: 'failed', reason: message.value });
+          if (message.type === 'error') onStatus({ state: 'failed', reason: reasonOf(message.value) });
           if (message.type !== 'mse' || buffer) return;
           buffer = source.addSourceBuffer(message.value);
           buffer.mode = 'segments';
