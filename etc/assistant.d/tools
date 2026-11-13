@@ -7,4 +7,5 @@ automation-status
 automations
 automation-show
 automation-check
+automation-new
 automation-set
