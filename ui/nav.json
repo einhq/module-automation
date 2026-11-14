@@ -28,6 +28,16 @@
       "icon": "radar",
       "route": "/found-devices-button",
       "signedIn": true
+    },
+    {
+      "id": "automation.mqtt",
+      "slot": "settings.views",
+      "label": "MQTT broker",
+      "description": "The broker the automation bridge hears devices on, and the account it signs in with.",
+      "icon": "topology-star-3",
+      "route": "/settings/mqtt",
+      "admin": true,
+      "order": 30
     }
   ]
 }
