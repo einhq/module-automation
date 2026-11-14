@@ -210,6 +210,7 @@
     "routes": {
       "/automations": "ui/pages/automations.tsx",
       "/settings/mqtt": "ui/pages/settings-mqtt.tsx",
+      "/settings/restreamer": "ui/pages/settings-restreamer.tsx",
       "/camera-live": "ui/pages/camera-live.tsx",
       "/cards/automation/camera": "ui/cards/camera.tsx",
       "/cards/automation/button": "ui/cards/button.tsx",

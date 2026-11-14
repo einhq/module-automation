@@ -1,20 +1,23 @@
 #!ts
 /**
  * automation-status — whether the bridge hears the broker, which drivers it registered, how many
- * devices they drive, and the automations; or what each node of one automation last did.
+ * devices they drive, and the automations; whether the restreamer answers; or what each node of one
+ * automation last did.
  *
  *   automation-status                 everything, as JSON in JSON mode
  *   automation-status --brief         one line, for the services list
  *   automation-status --checks        the checks `health` reads
  *   automation-status --automations   one line on the automation engine
+ *   automation-status --streams       whether the restreamer answers, as JSON in JSON mode
  *   automation-status hall-light      each node of a running automation: what it last sent, when, what it waits for
  */
 
 import type { DeviceAttrs } from '@ein/api';
 import type { CmdReturn, Command, HealthCheck } from '@ein/client';
-import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags, serviceKey } from '@ein/client';
 import { DEV_PATH, devicePath } from '@ein/paths';
-import type { AutomationRunStatus, AutomationStatus } from '@automation/api';
+import type { AutomationRunStatus, AutomationStatus, RestreamerStatus } from '@automation/api';
+import { createRestreamer } from '@automation/cameras';
 import { mayChange, readAs, resolveAutomation } from '@automation/automation-commands';
 import { POLLED_DRIVERS } from '@automation/network';
 import { SOURCE_NAMES } from '@automation/sources';
@@ -73,6 +76,20 @@ const runStatus = async (cmd: Command, arg: string): Promise<AutomationRunStatus
   };
 };
 
+/** The restreamer, asked for its streams as the bridge signs in to it. */
+const restreamerOf = async (cmd: Command): Promise<RestreamerStatus> => {
+  const url = (cmd.env.CFG_AUTOMATION_STREAMS_URL ?? '').trim();
+  if (!url) return { configured: false, answering: false };
+  const rtsp = (cmd.env.CFG_AUTOMATION_STREAMS_RTSP ?? '').trim();
+  const said = { configured: true, url, ...(rtsp ? { rtsp } : {}) };
+  try {
+    const restreamer = createRestreamer(fetch, url, await serviceKey(cmd, 'CFG_AUTOMATION_STREAMS_KEY', 'CFG_AUTOMATION_STREAMS_URL') ?? '', rtsp);
+    return { ...said, answering: true, streams: (await restreamer.names()).size };
+  } catch (error) {
+    return { ...said, answering: false, error: error instanceof Error ? error.message : String(error) };
+  }
+};
+
 const brief = (status: AutomationStatus): string => {
   if (!status.running) return 'not running';
   if (!status.configured) return `${status.devices} devices, ${status.endpoints} endpoints; no broker set, so only the devices asked over the network are read`;
@@ -91,8 +108,15 @@ const checks = (status: AutomationStatus): HealthCheck[] => {
 
 const automationStatus = async (cmd: Command): CmdReturn => {
   const unknown: string[] = [];
-  const flags = parseArgs(cmd.args, { boolean: ['brief', 'checks', 'automations'], unknown: collectUnknownFlags(unknown) });
+  const flags = parseArgs(cmd.args, { boolean: ['brief', 'checks', 'automations', 'streams'], unknown: collectUnknownFlags(unknown) });
   if (await reportUnknownFlags(cmd, unknown)) return 1;
+  if (flags.streams) {
+    const streams = await restreamerOf(cmd);
+    if (cmd.json) await cmd.writeJSON(streams satisfies RestreamerStatus);
+    else if (!streams.configured) await cmd.writeLn('no restreamer is set');
+    else await cmd.writeLn(streams.answering ? `${streams.url}: ${streams.streams} streams` : `${streams.url}: ${streams.error}`);
+    return 0;
+  }
   if (flags._.length) {
     try {
       const run = await runStatus(cmd, String(flags._[0]));
@@ -144,11 +168,12 @@ automationStatus.spec = {
     { name: 'brief', type: 'bool' as const, description: 'one line, as the services list shows it' },
     { name: 'checks', type: 'bool' as const, description: 'the checks health reads, as JSON' },
     { name: 'automations', type: 'bool' as const, description: 'one line on the automation engine, as the services list shows it' },
+    { name: 'streams', type: 'bool' as const, description: 'whether the restreamer answers, and how many streams it has' },
   ],
   args: [{ name: 'automation', type: 'string' as const, description: 'one automation, whose nodes to show', optional: true }],
-  examples: ['automation-status', 'automation-status --brief', 'automation-status hall-light'],
+  examples: ['automation-status', 'automation-status --brief', 'automation-status --streams', 'automation-status hall-light'],
   returns:
-    'AutomationStatus: configured, url, running, connected, since, drivers, devices, endpoints, messages, unsupported, lastError, automations {running, actions, problems}; with an automation, AutomationRunStatus: name, running, problems, nodes',
+    'AutomationStatus: configured, url, running, connected, since, drivers, devices, endpoints, messages, unsupported, lastError, automations {running, actions, problems}; with an automation, AutomationRunStatus: name, running, problems, nodes; with --streams, RestreamerStatus: configured, url, rtsp, answering, streams, error',
 };
 
 export default automationStatus;

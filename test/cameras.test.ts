@@ -3,13 +3,15 @@
  * camera made with its stream's address and password is given to the restreamer with the password
  * in the address and nowhere else, its streams say their size and codec, a frame and the live socket
  * come through core, a stream the restreamer lost is given back when it is asked for, and forgetting
- * the camera takes its streams from the restreamer. The onvif driver, against a stub camera: its
+ * the camera takes its streams from the restreamer; `automation-status --streams` says whether the
+ * restreamer answers EiN's account. The onvif driver, against a stub camera: its
  * profiles become the streams, its motion and people seen are logged, and its presets and moves are
  * controls.
  */
 
 import { assert, assertEquals } from '@std/assert';
 import type { DeviceInfo } from '@ein/api';
+import type { RestreamerStatus } from '../lib/api.ts';
 import { ADMIN_ACCESS, createTestContext } from '@ein/testing';
 import { jpegSize } from '../lib/cameras/restreamer.ts';
 import { startOnvifCamera } from './onvif-camera.ts';
@@ -129,6 +131,19 @@ Deno.test({ name: 'rtsp cameras are given to the restreamer and watched through 
     await t.step('forgetting the camera takes its streams from the restreamer', async () => {
       await admin.execString('device-forget front-door');
       assertEquals(restreamer.sources.size, 0);
+    });
+
+    await t.step('automation-status --streams says the restreamer answers its account, and refuses another password', async () => {
+      assertEquals(await admin.execJson<RestreamerStatus>('automation-status --streams'), {
+        configured: true,
+        url: restreamer.url,
+        rtsp: 'rtsp://192.0.2.1:8554',
+        answering: true,
+        streams: 0,
+      });
+      await admin.execString('config set CFG_AUTOMATION_STREAMS_KEY another');
+      const refused = await admin.execJson<RestreamerStatus>('automation-status --streams');
+      assertEquals([refused.answering, refused.error], [false, 'the restreamer answered 401']);
     });
   } finally {
     admin.close();

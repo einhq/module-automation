@@ -38,6 +38,16 @@
       "route": "/settings/mqtt",
       "admin": true,
       "order": 30
+    },
+    {
+      "id": "automation.restreamer",
+      "slot": "settings.views",
+      "label": "Restreamer",
+      "description": "Where cameras' live views and pictures come from, and where the media service reads their streams.",
+      "icon": "video",
+      "route": "/settings/restreamer",
+      "admin": true,
+      "order": 35
     }
   ]
 }

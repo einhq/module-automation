@@ -28,6 +28,23 @@ export type AutomationStatus = {
   automations?: { running: number; actions: number; problems: string[] };
 };
 
+/**
+ * `automation-status --streams`: the restreamer cameras are given to (`CFG_AUTOMATION_STREAMS_URL`),
+ * whether it answers with the account EiN signs in as, and how many streams it has.
+ */
+export type RestreamerStatus = {
+  /** False when no restreamer is set. */
+  configured: boolean;
+  url?: string;
+  /** Where the media service reads a stream (`CFG_AUTOMATION_STREAMS_RTSP`), which EiN cannot try. */
+  rtsp?: string;
+  answering: boolean;
+  /** The streams it has, when it answers. */
+  streams?: number;
+  /** Why it did not answer, or refused EiN's account. */
+  error?: string;
+};
+
 /** What an automation's messages carry: a device's reading, a word, a number. */
 export type AutomationValue = number | string | boolean | null;
 
