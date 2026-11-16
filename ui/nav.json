@@ -1,0 +1,13 @@
+{
+  "sidebar": [
+    {
+      "id": "automation.automations",
+      "section": "system",
+      "label": "Automations",
+      "icon": "topology-star-3",
+      "to": "/automations",
+      "order": 25,
+      "group": "automation"
+    }
+  ]
+}

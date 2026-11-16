@@ -1,0 +1,401 @@
+/**
+ * The automation engine in a booted EiN, on core's webhook devices and this module's virtual ones:
+ * an automation a member of the automation group writes runs on a press, as her and no more than she
+ * may; it switches a plug by writing its control and runs a line with the value it was sent, never
+ * as part of the line; an automation whose owner may not read what it reads, or that others may
+ * change, is held back and says why; its own script, a child of its file, runs as its owner and
+ * sends its lines on its outputs, and is not run while others may change it; a file coming into a
+ * folder is sent once written, and only
+ * one its owner may read; a timer runs on over a restart of the service and a move of its node; a
+ * module's automation runs and only the administrator turns it off; an event reaches an automation
+ * only when its owner may read the node it is about, and only the administrator's raise one; and
+ * the commands say all that.
+ */
+
+import { assert, assertEquals, assertStringIncludes } from '@std/assert';
+import { createTestContext, type ShellClient } from '@ein/testing';
+import type { AutomationCheck, AutomationDetail, AutomationRunStatus, AutomationSetAnswer, AutomationStatus, AutomationSummary } from '@automation/api';
+
+const until = async <T>(what: string, read: () => Promise<T>, check: (value: T) => boolean, timeoutMs = 10_000): Promise<T> => {
+  const end = Date.now() + timeoutMs;
+  let last: T | undefined;
+  while (Date.now() < end) {
+    try {
+      last = await read();
+      if (check(last)) return last;
+    } catch {
+      // not there yet
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error(`${what}: still ${JSON.stringify(last)}`);
+};
+
+/** A shell word holding `text`, single-quoted. */
+const quoted = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
+
+const PORCH = `description: The porch button toggles the hall plug and notes the press
+nodes:
+  press: {type: device, endpoint: porch-button/input-0, is: single, to: [toggle, note]}
+  toggle: {type: control, endpoint: hall-plug/switch-0, value: toggle}
+  note: {type: shell, run: 'echo "$VALUE" > /home/anna/fired.txt'}
+`;
+
+const TIMER = (x: number) =>
+  `nodes:
+  go: {type: button, to: [linger], pos: [${x}, 0]}
+  linger: {type: timer, off-after: 3s, to: {false: [done]}}
+  done: {type: shell, run: 'echo done > /home/anna/timer.txt'}
+`;
+
+const HEAT = `nodes:
+  go: {type: button, value: 21, to: [check]}
+  check: {type: script, script: check.sh, outputs: [heat, who], to: {heat: [heat-note], who: [who-note]}}
+  heat-note: {type: shell, run: 'echo "$VALUE" > /home/anna/heat.txt'}
+  who-note: {type: shell, run: 'echo "$VALUE" > /home/anna/who.txt'}
+`;
+
+/** Its own script, made as the editor makes one, and given its lines. */
+const CHECK_SH = (lines: string[]) =>
+  'mkdir -p -m 755 /etc/automations/heat.yaml/scripts && mknode -t file --tier db -m 755 --as name=check.sh --as mimetype=text/x-shellscript --an size=0 /etc/automations/heat.yaml/scripts/check.sh && printf "%s\\n" ' +
+  lines.map(quoted).join(' ') + ' > /etc/automations/heat.yaml/scripts/check.sh';
+
+const NASTY = `nodes:
+  go: {type: button, to: [word]}
+  word: {type: set, value: "a'; echo pwned > /home/anna/pwned.txt; echo '", to: [note]}
+  note: {type: shell, run: 'echo "$VALUE" > /home/anna/value.txt'}
+`;
+
+Deno.test({ name: 'automation engine', sanitizeResources: false, sanitizeOps: false }, async (t) => {
+  const testCtx = createTestContext({ modules: ['automation'], boot: true });
+  await testCtx.setup();
+  const admin = await testCtx.server.createShellClient();
+  const clients: ShellClient[] = [admin];
+
+  try {
+    for (const name of ['anna', 'bo', 'carl']) await admin.execString(`user-create ${name} && user-passwd ${name} --new-password hunter2`);
+    await until('the engine', () => admin.execJson<AutomationStatus>('automation-status'), (status) => status.running);
+    await admin.execString('group-add-member automation anna && group-add-member devices anna && group-add-member automation bo');
+    const signIn = async (username: string) => {
+      const client = await testCtx.server.createShellClient({ username, password: 'hunter2' });
+      clients.push(client);
+      return client;
+    };
+    const anna = await signIn('anna');
+    const bo = await signIn('bo');
+    const carl = await signIn('carl');
+    // A button whose presses are posted to it, and a plug whose switch holds what is written to it.
+    const press = (kind: string) => admin.execString(`echo '{"input-0": "${kind}"}' > /dev/porch-button`);
+    const plug = async () => (await anna.execString('tail -n 1 /dev/hall-plug/switch-0')).trim();
+    await admin.execString(
+      `device-create porch-button --driver webhook --config events=input-0 && device-create hall-plug --driver virtual --config ${quoted('set=switch-0=bool')}`,
+    );
+    await press('long');
+    await admin.execString('echo on > /dev/hall-plug/switch-0');
+    await until('the plug', plug, (text) => text.includes('true'));
+    await until('the button', () => anna.execString('device-show porch-button'), (text) => text.includes('input-0'));
+    const running = (name: string) =>
+      until(`${name} running`, () => admin.execJson<AutomationSummary[]>('automations'), (list) => list.some((each) => each.name === name && each.running));
+
+    await t.step('a member makes one from a starting point, a db-tier file only she may change', async () => {
+      const made = await anna.execJson<AutomationSetAnswer>('automation-new porch --from button-toggle');
+      assertEquals([made.created, made.path], [true, '/etc/automations/porch.yaml']);
+      const stat = await admin.execJson<{ props: { uid: number; mode: number; tier?: string } }>('stat /etc/automations/porch.yaml');
+      assertEquals([stat.props.mode & 0o777, stat.props.tier], [0o755, 'db']);
+      assertEquals((await anna.exec('automation-new porch')).success, false);
+    });
+
+    await t.step('one made with its slots set, or tried with --dry-run, is checked first, naming a control she cannot write', async () => {
+      const slots = '--from button-toggle --set button=porch-button/input-0 --set lamp=';
+      const dry = await anna.execJson<AutomationSetAnswer>(`automation-new porch-lamp ${slots}hall-plug/switch-0 --dry-run`);
+      assertEquals([dry.written, dry.problems], [false, []]);
+      assertStringIncludes(await anna.execString(`JSON_OUTPUT=0 automation-new porch-lamp ${slots}hall-plug/switch-0 --dry-run`), 'endpoint: hall-plug/switch-0');
+      const unwired = quoted(PORCH.replace(', to: [toggle, note]', ', to: [note]'));
+      const loose = await anna.execJson<AutomationSetAnswer>(`automation-set porch-lamp --dry-run --yaml ${unwired} || true`);
+      assertEquals(loose.problems, [{ node: 'toggle', message: 'nothing sends to it: wire into it what it should act on' }]);
+      const wrong = await anna.execJson<AutomationSetAnswer>(`automation-new porch-lamp ${slots}hall-plug/switch-9 --dry-run || true`);
+      assertEquals(wrong.problems, [{ message: 'you may not write hall-plug/switch-9, or there is no such control' }]);
+      assertEquals((await anna.exec(`automation-new porch-lamp ${slots}hall-plug/switch-9`)).success, false);
+      const yaml = quoted(PORCH.replace('hall-plug/switch-0', 'hall-plug/switch-9'));
+      const tried = await anna.execJson<AutomationSetAnswer>(`automation-set porch-lamp --dry-run --yaml ${yaml} || true`);
+      assertEquals([tried.written, tried.problems], [false, [{ message: 'you may not write hall-plug/switch-9, or there is no such control' }]]);
+      assertEquals((await anna.exec('stat /etc/automations/porch-lamp.yaml')).success, false);
+      const made = await anna.execJson<AutomationSetAnswer>(`automation-new porch-lamp ${slots}hall-plug/switch-0`);
+      assertEquals([made.written, made.problems], [true, []]);
+      await anna.execString('rm /etc/automations/porch-lamp.yaml');
+    });
+
+    await t.step('one with problems is refused, unless as a draft, and says where they are', async () => {
+      const refused = await anna.exec(`automation-set porch --yaml ${quoted('nodes: {a: {type: delay}}')}`);
+      assertEquals(refused.success, false);
+      const draft = await anna.execJson<AutomationSetAnswer>(`automation-set porch --draft --yaml ${quoted('nodes: {a: {type: delay}}')}`);
+      assertEquals([draft.written, draft.problems], [true, [{ node: 'a', message: 'for is needed: for' }]]);
+      const broken = await anna.exec(`automation-set porch --draft --yaml ${quoted('nodes: {a: [')}`);
+      assertEquals([broken.success, (await anna.execString('cat /etc/automations/porch.yaml')).includes('delay')], [false, true]);
+      const listed = await until(
+        'held back',
+        () => anna.execJson<AutomationSummary[]>('automations'),
+        (list) => list.some((each) => each.name === 'porch' && each.problems.length > 0),
+      );
+      assertEquals(listed.find((each) => each.name === 'porch')?.running, false);
+    });
+
+    await t.step('a press runs it as its owner: the plug, which was on, is switched off, and the line gets the value', async () => {
+      await anna.execString(`automation-set porch --yaml ${quoted(PORCH)}`);
+      await running('porch');
+      await press('single');
+      await until('the plug off', plug, (text) => text.includes('false'));
+      const fired = await until('fired.txt', () => admin.execString('cat /home/anna/fired.txt'), (text) => text.trim() === 'single');
+      assertEquals(fired.trim(), 'single');
+      const stat = await admin.execJson<{ props: { uid: number } }>('stat /home/anna/fired.txt');
+      assertEquals(stat.props.uid, (await admin.execJson<{ uid: number }>('user-info anna')).uid);
+      const status = await anna.execJson<AutomationRunStatus>('automation-status porch');
+      assertEquals([status.running, status.nodes.press.value], [true, 'single']);
+    });
+
+    await t.step('a press of another kind does not', async () => {
+      const before = await anna.execString('cat /dev/hall-plug/switch-0');
+      await press('long');
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      assertEquals(await anna.execString('cat /dev/hall-plug/switch-0'), before);
+    });
+
+    await t.step('a value reaches a line as $VALUE, never as part of it', async () => {
+      await anna.execString(`automation-set nasty --yaml ${quoted(NASTY)}`);
+      await running('nasty');
+      await anna.execString('automation-trigger nasty go');
+      const value = await until('value.txt', () => admin.execString('cat /home/anna/value.txt'), (text) => text.includes('pwned'));
+      assertEquals(value.trim(), "a'; echo pwned > /home/anna/pwned.txt; echo '");
+      assertEquals((await admin.exec('stat /home/anna/pwned.txt')).success, false);
+      const log = await until('the run log', () => anna.execString('JSON_OUTPUT=0 log-read /var/logs/automations/nasty'), (text) => text.includes('"action"'));
+      assert(log.includes('"node":"note"'));
+      assertEquals((await bo.exec('log-read /var/logs/automations/nasty')).success, false, "the run log is its owner's");
+    });
+
+    await t.step('a file that comes into her folder is sent once written: one of another name, or one she may not read, is not', async () => {
+      await anna.execString('mkdir -p /home/anna/inbox /home/anna/documents');
+      await anna.execString('automation-new inbox --from inbox');
+      await anna.execString(`automation-set seen --yaml ${quoted('nodes: {seen: {type: file, folder: /home/anna/inbox, to: [shown]}, shown: {type: debug}}')}`);
+      await running('inbox');
+      await running('seen');
+      await admin.execString('echo secret > /home/hidden.pdf && chmod 600 /home/hidden.pdf && mv /home/hidden.pdf /home/anna/inbox/hidden.pdf');
+      await anna.execString('echo notes > /home/anna/inbox/notes.txt');
+      await anna.execString('echo scanned > /home/anna/inbox/scan.pdf');
+      const there = async (path: string) => (await admin.exec(`stat ${path}`)).success;
+      await until('scan.pdf filed', () => there('/home/anna/documents/scan.pdf'), Boolean);
+      assertEquals([await there('/home/anna/inbox/hidden.pdf'), await there('/home/anna/inbox/notes.txt')], [true, true]);
+      const seen = async () =>
+        (await anna.execString('JSON_OUTPUT=0 log-read /var/logs/automations/seen')).split('\n').filter((line) => line.includes('"debug"')).map((line) =>
+          JSON.parse(line.slice(line.indexOf('{'))).value
+        );
+      assertEquals(await until('seen', seen, (paths) => paths.includes('/home/anna/inbox/scan.pdf')), ['/home/anna/inbox/notes.txt', '/home/anna/inbox/scan.pdf']);
+      const status = await anna.execJson<AutomationRunStatus>('automation-status inbox');
+      assertEquals(status.nodes.scan.value, '/home/anna/inbox/scan.pdf');
+
+      await anna.execString('chmod 700 /home/anna/inbox');
+      await bo.execString(`automation-set bos-inbox --yaml ${quoted('nodes: {scan: {type: file, folder: /home/anna/inbox}}')}`);
+      const list = await until(
+        'held back',
+        () => bo.execJson<AutomationSummary[]>('automations'),
+        (list) => (list.find((each) => each.name === 'bos-inbox')?.problems.length ?? 0) > 0,
+      );
+      assertEquals(list.find((each) => each.name === 'bos-inbox')?.problems[0].message, 'its owner may not read the folder /home/anna/inbox, or there is none');
+    });
+
+    await t.step('a timer runs on over a restart of the service and a move of its node', async () => {
+      await anna.execString(`automation-set timer --yaml ${quoted(TIMER(0))}`);
+      await running('timer');
+      await anna.execString('automation-trigger timer go');
+      await anna.execString(`automation-set timer --yaml ${quoted(TIMER(300))}`);
+      await admin.execString('service restart automation-engine');
+      await until('timer.txt', () => admin.execString('cat /home/anna/timer.txt'), (text) => text.trim() === 'done', 15_000);
+    });
+
+    await t.step('one whose owner may not read what it reads is held back, saying why, and runs once she may', async () => {
+      const mode = (await admin.execJson<{ props: { mode: number } }>('stat /dev/porch-button/input-0')).props.mode & 0o777;
+      await admin.execString('chmod 600 /dev/porch-button/input-0');
+      await bo.execString(`automation-set bos --yaml ${quoted('nodes: {press: {type: device, endpoint: porch-button/input-0}}')}`);
+      const list = await until(
+        'held back',
+        () => bo.execJson<AutomationSummary[]>('automations'),
+        (list) => (list.find((each) => each.name === 'bos')?.problems.length ?? 0) > 0,
+      );
+      const bos = list.find((each) => each.name === 'bos')!;
+      assertEquals([bos.running, bos.problems[0].message], [false, 'its owner may not read porch-button/input-0, or there is no such endpoint']);
+      assertEquals((await bo.exec('automation-status porch')).success, false, "another's nodes are not bo's to see");
+      await anna.execString('automation-enable porch');
+      const lost = await anna.execJson<AutomationSummary[]>('automations');
+      assertEquals(lost.find((each) => each.name === 'porch')?.running, false, 'anna lost the press too, and the check again says so');
+      await admin.execString(`chmod ${mode.toString(8)} /dev/porch-button/input-0`);
+      await anna.execString('automation-enable porch');
+      await running('porch');
+    });
+
+    await t.step('one others may change, by its mode or its access list, is not run', async () => {
+      await anna.execString(`automation-set shared --yaml ${quoted('nodes: {go: {type: button}}')} && chmod 664 /etc/automations/shared.yaml`);
+      await anna.execString(`automation-set listed --yaml ${quoted('nodes: {go: {type: button}}')} && share-set /etc/automations/listed.yaml -m u:bo:rw`);
+      const list = await until(
+        'held back',
+        () => anna.execJson<AutomationSummary[]>('automations'),
+        (list) => ['shared', 'listed'].every((name) => (list.find((each) => each.name === name)?.problems.length ?? 0) > 0),
+      );
+      for (const name of ['shared', 'listed']) assert(list.find((each) => each.name === name)!.problems[0].message.startsWith('others than its owner may change it'));
+    });
+
+    await t.step(
+      'its own script, a child of its file, runs as its owner with what is wired in, and its lines go on its outputs; one others may change is not run',
+      async () => {
+        const problem = (name: string) =>
+          until(`${name} held back`, () => anna.execJson<AutomationSummary[]>('automations'), (list) => (list.find((each) => each.name === name)?.problems.length ?? 0) > 0)
+            .then((list) => list.find((each) => each.name === name)!.problems[0].message);
+        await anna.execString(`automation-set heat --yaml ${quoted(HEAT)}`);
+        assertEquals(await problem('heat'), 'it has no script check.sh');
+        await anna.execString(CHECK_SH(['#!bash', 'echo "heat=$go"', 'echo "who=$(user-whoami)"', 'echo done']));
+        await running('heat');
+        assertEquals((await anna.execJson<AutomationDetail>('automation-show heat')).scripts, ['check.sh']);
+        await anna.execString('automation-trigger heat go');
+        assertEquals((await until('heat.txt', () => admin.execString('cat /home/anna/heat.txt'), (text) => text.trim() !== '')).trim(), '21');
+        assertEquals((await until('who.txt', () => admin.execString('cat /home/anna/who.txt'), (text) => text.trim() !== '')).trim(), 'anna');
+        assertEquals((await anna.execJson<AutomationRunStatus>('automation-status heat')).nodes.check.value, 'done');
+
+        await anna.execString('chmod 775 /etc/automations/heat.yaml/scripts/check.sh');
+        assert((await problem('heat')).startsWith('others than its owner may change the script check.sh'));
+        await anna.execString('chmod 755 /etc/automations/heat.yaml/scripts/check.sh');
+        await running('heat');
+        assertEquals((await bo.exec('printf x > /etc/automations/heat.yaml/scripts/check.sh')).success, false, "the script is anna's alone to change");
+      },
+    );
+
+    await t.step('automation-check says what each node would say now, as the caller reads it', async () => {
+      const check = await anna.execJson<AutomationCheck>('automation-check porch');
+      assertEquals(check.problems, []);
+      assertEquals(check.endpoints.find((each) => each.endpoint === 'hall-plug/switch-0')?.readable, true);
+      const show = await anna.execJson<AutomationDetail>('automation-show porch');
+      assertEquals([show.owner, show.writable, Object.keys(show.spec?.nodes ?? {})], ['anna', true, ['press', 'toggle', 'note']]);
+      assert(show.spec!.nodes.press.pos, 'a node without a place is given one');
+    });
+
+    await t.step("a module's automation runs as the administrator, and only the administrator turns it off", async () => {
+      await admin.execString(
+        `mkdir -p /etc/automations.d/stub && echo ${quoted(TIMER(0).replace('/home/anna/timer.txt', '/home/anna/module.txt'))} > /etc/automations.d/stub/hello.yaml`,
+      );
+      await running('stub/hello');
+      assertEquals((await anna.exec('automation-disable stub/hello')).success, false);
+      await admin.execString('automation-disable stub/hello');
+      const list = await anna.execJson<AutomationSummary[]>('automations');
+      assertEquals(list.find((each) => each.name === 'stub/hello')?.enabled, false);
+      await admin.execString('automation-enable stub/hello');
+      await running('stub/hello');
+    });
+
+    await t.step('an event reaches an automation when its owner may read the node it is about; one an automation raises reaches pipelines, not automations', async () => {
+      const keys = () => admin.execJson<{ attrs: { routingKeys: string[] } }>('stat /var/queues/automation-events').then((node) => node.attrs.routingKeys);
+      assertEquals(await keys(), [], 'no automation listens, so no event is queued');
+      await anna.execString(`automation-set heard --yaml ${
+        quoted(`nodes:
+  seen: {type: event-in, event: example.thing.#, to: [note]}
+  done: {type: event-in, event: pipeline.instance.completed}
+  note: {type: shell, run: 'echo "$TOPIC $VALUE" >> /home/anna/heard.txt'}
+`)
+      }`);
+      await running('heard');
+      await until('the events queue bound', keys, (list) => list.join() === 'system.events,system.pipeline');
+
+      await bo.execString('echo x > /home/bo/secret.txt && chmod 600 /home/bo/secret.txt');
+      const raise = (type: string, subject: string) =>
+        admin.execString(`echo ${quoted(JSON.stringify({ id: crypto.randomUUID(), type, subject, time: Date.now() }))} > /dev/events`);
+      await raise('example.thing.done', '/home/bo/secret.txt');
+      await raise('example.other', '/home/anna');
+      await raise('example.thing.done', '/home/anna');
+      const heard = await until('heard.txt', () => admin.execString('cat /home/anna/heard.txt'), (text) => text.includes('/home/anna'));
+      assertEquals(heard.trim().split('\n'), ['example.thing.done /home/anna'], "bo's file is not anna's to hear of, nor another event");
+
+      await admin.execString(`mkqueue -k system.events /home/admin/raised && automation-set raiser --yaml ${
+        quoted(`nodes:
+  go: {type: button, value: /home/anna, to: [raise]}
+  raise: {type: event-out, event: example.thing.raised}
+`)
+      }`);
+      await running('raiser');
+      await admin.execString('automation-trigger raiser go');
+      const raised = await until(
+        'the raised event',
+        () => admin.execJson<{ items: { data: { type: string; subject: string; source: string; data: Record<string, string> } }[] }>('queue-peek -n 20 /home/admin/raised'),
+        (peek) => peek.items.some((item) => item.data.type === 'example.thing.raised'),
+      );
+      const event = raised.items.find((item) => item.data.type === 'example.thing.raised')!.data;
+      assertEquals([event.subject, event.source, event.data.automation, event.data.value], ['/home/anna', 'automation', 'raiser', '/home/anna']);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      assertEquals((await admin.execString('cat /home/anna/heard.txt')).includes('raised'), false, "an automation's event does not set off another");
+
+      await bo.execString(
+        `automation-set bos-raiser --yaml ${quoted('nodes: {go: {type: button, value: /home/bo, to: [raise]}, raise: {type: event-out, event: example.bo}}')}`,
+      );
+      const list = await until(
+        'held back',
+        () => bo.execJson<AutomationSummary[]>('automations'),
+        (list) => (list.find((each) => each.name === 'bos-raiser')?.problems.length ?? 0) > 0,
+      );
+      assertEquals(list.find((each) => each.name === 'bos-raiser')!.problems[0].message, 'its owner may not raise events: only the administrator writes /dev/events');
+      assertStringIncludes(await bo.execString('automation-check bos-raiser || true'), 'you may not raise events');
+
+      await anna.execString('rm /etc/automations/heard.yaml');
+      await until('the events queue unbound', keys, (list) => list.length === 0);
+    });
+
+    await t.step('a person turns her own off and on', async () => {
+      await anna.execString('automation-disable porch');
+      const off = await anna.execJson<AutomationSummary[]>('automations');
+      assertEquals(off.find((each) => each.name === 'porch')?.enabled, false);
+      assertEquals((await bo.exec('automation-enable porch')).success, false);
+      await anna.execString('automation-enable porch');
+      await running('porch');
+    });
+
+    await t.step('a virtual device averages two sensors, and follows them', async () => {
+      await admin.execString('device-create hall-sensor --driver webhook && device-create kitchen-sensor --driver webhook');
+      await admin.execString(`echo '{"temperature": 20}' > /dev/hall-sensor && echo '{"temperature": 23}' > /dev/kitchen-sensor`);
+      await anna.execString(
+        `device-create indoors --driver virtual --class sensor --config ${
+          quoted('read=temperature=avg hall-sensor/temperature kitchen-sensor/temperature; warmest=max hall-sensor/temperature kitchen-sensor/temperature')
+        } --config ${quoted('set=away=bool; setpoint=number 5..30 0.5 °C')}`,
+      );
+      const reading = (endpoint: string) => async () => (await anna.execString(`tail -n 1 /dev/indoors/${endpoint}`)).trim();
+      await until('the average', reading('temperature'), (text) => text.includes('21.5'));
+      await admin.execString(`echo '{"temperature": 26}' > /dev/kitchen-sensor`);
+      await until('the average again', reading('temperature'), (text) => text.includes('23'));
+      await until('the warmest', reading('warmest'), (text) => text.includes('26'));
+      assertEquals((await anna.exec('echo 99 > /dev/indoors/temperature')).success, false, "a worked-out reading is no member's to write");
+    });
+
+    await t.step("a virtual device's control holds what is set, and an automation hears it", async () => {
+      await anna.execString('echo on > /dev/indoors/away');
+      await until('away', async () => (await anna.execString('tail -n 1 /dev/indoors/away')).trim(), (text) => text.includes('true'));
+      await anna.execString('echo toggle > /dev/indoors/away');
+      await until('back', async () => (await anna.execString('tail -n 1 /dev/indoors/away')).trim(), (text) => text.includes('false'));
+      assertEquals((await anna.exec('echo 40 > /dev/indoors/setpoint')).success, false, 'a setpoint keeps to its range');
+      await anna.execString(
+        `automation-set away --yaml ${
+          quoted('nodes: {away: {type: device, endpoint: indoors/away, to: [note]}, note: {type: shell, run: \'echo "$VALUE" > /home/anna/away.txt\'}}')
+        }`,
+      );
+      await running('away');
+      await anna.execString('echo on > /dev/indoors/away');
+      await until('away.txt', () => admin.execString('cat /home/anna/away.txt'), (text) => text.trim() === 'on');
+    });
+
+    await t.step('a virtual device may not read what the devices group may not, nor itself', async () => {
+      await admin.execString('chmod 600 /dev/hall-sensor/temperature');
+      assertEquals((await anna.exec(`device-create narrowed --driver virtual --config ${quoted('read=t=avg hall-sensor/temperature')}`)).success, false);
+      assertEquals((await anna.exec(`device-create loop --driver virtual --config ${quoted('read=t=last loop/t')}`)).success, false);
+    });
+
+    await t.step('only the automation group reads and writes automations', async () => {
+      assertEquals((await carl.exec('ls /etc/automations')).success, false);
+      assertEquals((await carl.exec('automation-new mine')).success, false);
+    });
+  } finally {
+    for (const client of clients) client.close();
+    await testCtx.teardown();
+  }
+});

@@ -1,0 +1,100 @@
+#!ts
+/**
+ * automation-set — write an automation's YAML, made when it is new. One with problems is refused,
+ * saying what they are, unless `--draft`: then it is written, and not run until they are gone. Text that
+ * is not YAML at all is never written. `--dry-run` writes nothing and says its problems as
+ * automation-check does, endpoints the caller may not read or switch among them.
+ *
+ *   automation-set hall-light < hall-light.yaml       the YAML as given, comments and all
+ *   automation-set hall-light --yaml "$text"
+ *   automation-set hall-light --json '{"nodes": …}'   a graph, written as YAML in the editor's order
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { AutomationSetAnswer, AutomationSpec } from '@automation/api';
+import { checkAutomation, problemLines, resolveAutomation, yamlOf } from '@automation/automation-commands';
+import { parseAutomationText, writeText } from '@automation/automation-files';
+import { engineState } from '@automation/state';
+
+const automationSet = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['yaml', 'json'], boolean: ['draft', 'dry-run'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  try {
+    const { name, path } = resolveAutomation(String(flags._[0] ?? ''));
+    if (name.includes('/')) throw new Error(`${name} is its module's, and changes with it`);
+    if (flags.yaml !== undefined && flags.json !== undefined) throw new Error('give --yaml or --json, not both');
+    let text: string;
+    if (flags.json !== undefined) {
+      let spec: AutomationSpec;
+      try {
+        spec = JSON.parse(flags.json);
+      } catch (error) {
+        throw new Error(`--json is not JSON: ${error instanceof Error ? error.message : error}`);
+      }
+      text = yamlOf(spec);
+    } else if (flags.yaml !== undefined) {
+      text = flags.yaml;
+    } else {
+      if (cmd.tty) throw new Error('give the YAML on stdin, with --yaml or with --json');
+      text = await cmd.stdin.text();
+    }
+    if (!text.endsWith('\n')) text += '\n';
+    const read = parseAutomationText(text);
+    const { spec } = read;
+    const exists = await cmd.sys.vfs.exists(cmd.access, path);
+    if (flags['dry-run']) {
+      const { problems } = await checkAutomation(cmd, read, name);
+      const answer: AutomationSetAnswer = { name, path, written: false, created: false, problems };
+      if (cmd.json) await cmd.writeJSON(answer satisfies AutomationSetAnswer);
+      else {
+        await cmd.writeLn(problems.length ? `${name} has problems:` : `${name} has no problems`);
+        for (const line of problemLines(problems)) await cmd.writeLn(line);
+      }
+      return problems.length ? 1 : 0;
+    }
+    const { problems } = read;
+    // A draft is a graph with problems; text that is not YAML at all is no graph, and is not written.
+    const write = problems.length === 0 || (flags.draft === true && spec !== undefined);
+    if (write) {
+      await writeText(cmd.sys.vfs, cmd.access, path, text);
+      await engineState()?.reload();
+    }
+    const answer: AutomationSetAnswer = { name, path, written: write, created: write && !exists, problems };
+    if (cmd.json) await cmd.writeJSON(answer satisfies AutomationSetAnswer);
+    else if (write) {
+      await cmd.writeLn(`${exists ? 'wrote' : 'made'} ${path}${problems.length ? ', not run until these are gone:' : ''}`);
+      for (const line of problemLines(problems)) await cmd.writeLn(line);
+    } else {
+      const hint = spec === undefined ? '' : '; --draft writes it anyway';
+      await cmd.writeError(`automation-set: ${name} not written${hint}:\n${problemLines(problems).join('\n')}\n`);
+    }
+    return write ? 0 : 1;
+  } catch (error) {
+    await cmd.writeError(`automation-set: ${error instanceof Error ? error.message : error}\n`);
+    return 1;
+  }
+};
+
+automationSet.spec = {
+  name: 'automation-set',
+  effect: 'write' as const,
+  description: "Write an automation's YAML, made when it is new; one with problems is refused unless --draft",
+  args: [{ name: 'automation', type: 'string' as const, description: '<name> or its file' }],
+  flags: [
+    { name: 'yaml', type: 'string' as const, description: 'the YAML, written as given' },
+    { name: 'json', type: 'string' as const, description: 'its graph as JSON, written as YAML' },
+    { name: 'draft', type: 'bool' as const, description: 'write it even with problems, unless it is not YAML; it is not run until they are gone' },
+    {
+      name: 'dry-run',
+      type: 'bool' as const,
+      dryRun: true,
+      description: 'write nothing: say what is wrong with it as automation-check does, devices you may not read or switch among it',
+    },
+  ],
+  examples: ['automation-set hall-light < hall-light.yaml', 'automation-set hall-light --yaml "$text" --draft'],
+  returns: 'AutomationSetAnswer: name, path, written, created, problems',
+};
+
+export default automationSet;

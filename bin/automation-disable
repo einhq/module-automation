@@ -1,0 +1,37 @@
+#!ts
+/**
+ * automation-disable — turn an automation off. A person's is turned off by whoever may change its file;
+ * a module's only by the administrator. `automation-enable` turns it back.
+ *
+ *   automation-disable hall-light
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import { readAs, resolveAutomation, setEnabled } from '@automation/automation-commands';
+
+const automationDisable = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  try {
+    const file = await readAs(cmd, resolveAutomation(String(flags._[0] ?? '')).path);
+    await setEnabled(cmd, file, false);
+    if (cmd.json) await cmd.writeJSON({ ok: true });
+    else await cmd.writeLn(`${file.name} is off`);
+    return 0;
+  } catch (error) {
+    await cmd.writeError(`automation-disable: ${error instanceof Error ? error.message : error}\n`);
+    return 1;
+  }
+};
+
+automationDisable.spec = {
+  name: 'automation-disable',
+  effect: 'write' as const,
+  description: "Turn an automation off: a person's by whoever may change its file, a module's by the administrator",
+  args: [{ name: 'automation', type: 'string' as const, description: '<name>, <module>/<name>, or its file' }],
+  examples: ['automation-disable hall-light'],
+};
+
+export default automationDisable;

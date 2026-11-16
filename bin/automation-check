@@ -1,0 +1,58 @@
+#!ts
+/**
+ * automation-check — what is wrong with an automation, and what each of its nodes would say now:
+ * the latest readings the caller may read sent through it, no action run. An endpoint the caller
+ * may not read, a control they may not write, a folder they may not read, or an event they may not
+ * raise is a problem, as it is for the engine when the caller owns it.
+ *
+ *   automation-check hall-light
+ *   automation-check --yaml "$text"     a draft, before it is written
+ */
+
+import type { CmdReturn, Command } from '@ein/client';
+import { collectUnknownFlags, parseArgs, reportUnknownFlags } from '@ein/client';
+import type { AutomationCheck } from '@automation/api';
+import { checkAutomation, problemLines, readAs, resolveAutomation } from '@automation/automation-commands';
+import { parseAutomationText } from '@automation/automation-files';
+
+const automationCheck = async (cmd: Command): CmdReturn => {
+  const unknown: string[] = [];
+  const flags = parseArgs(cmd.args, { string: ['yaml'], unknown: collectUnknownFlags(unknown) });
+  if (await reportUnknownFlags(cmd, unknown)) return 1;
+  try {
+    let check: AutomationCheck;
+    if (flags.yaml !== undefined) {
+      check = await checkAutomation(cmd, parseAutomationText(flags.yaml));
+    } else {
+      const file = await readAs(cmd, resolveAutomation(String(flags._[0] ?? '')).path);
+      check = await checkAutomation(cmd, file, file.name);
+    }
+    const { name, problems } = check;
+    if (cmd.json) {
+      await cmd.writeJSON(check satisfies AutomationCheck);
+    } else {
+      await cmd.writeLn(problems.length ? `${name ?? 'it'} has problems:` : `${name ?? 'it'} has no problems`);
+      for (const line of problemLines(problems)) await cmd.writeLn(line);
+      for (const each of check.endpoints) {
+        await cmd.writeLn(`  ${each.endpoint}: ${!each.readable ? 'you may not read it' : each.value === undefined ? 'no reading yet' : JSON.stringify(each.value)}`);
+      }
+      for (const [id, status] of Object.entries(check.nodes)) if (status.value !== undefined) await cmd.writeLn(`  ${id} says ${JSON.stringify(status.value)}`);
+    }
+    return problems.length ? 1 : 0;
+  } catch (error) {
+    await cmd.writeError(`automation-check: ${error instanceof Error ? error.message : error}\n`);
+    return 1;
+  }
+};
+
+automationCheck.spec = {
+  name: 'automation-check',
+  effect: 'read' as const,
+  description: 'What is wrong with an automation, and what each of its nodes would say now, from the latest readings the caller may read; no action is run',
+  args: [{ name: 'automation', type: 'string' as const, description: '<name>, <module>/<name>, or its file' }],
+  flags: [{ name: 'yaml', type: 'string' as const, description: 'check this YAML instead, a draft not yet written' }],
+  examples: ['automation-check hall-light'],
+  returns: 'AutomationCheck: name, problems, nodes (each node: value, at, due, problem, messages), endpoints (endpoint, readable, value, at)',
+};
+
+export default automationCheck;

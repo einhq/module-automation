@@ -1,0 +1,165 @@
+/** An automation tried out in the editor: fed by hand on a clock of its own, its actions said, not done. */
+
+import { assert, assertEquals } from '@std/assert';
+import { parse } from '@std/yaml';
+import { EXAMPLES } from '../lib/automations/examples.ts';
+import { KINDS } from '../lib/automations/catalog.ts';
+import { readAutomation } from '../lib/automations/graph.ts';
+import { sunEvent } from '../lib/automations/sun.ts';
+import { Simulation } from '../ui/automation/simulation.ts';
+
+const MIN = 60_000;
+/** A Monday, 06:00 in UTC. */
+const START = Date.UTC(2026, 10, 9, 6, 0);
+
+const simulationOf = (yaml: string) => {
+  const { automation, problems } = readAutomation(parse(yaml));
+  assertEquals(problems, []);
+  return new Simulation(automation!, 'UTC', START);
+};
+const example = (name: string) => EXAMPLES.find((each) => each.name === name)!.yaml;
+const said = (sim: Simulation, kind: string) => sim.entries.filter((entry) => entry.kind === kind).map((entry) => entry.text).reverse();
+
+Deno.test('simulation: the motion light switches the lamp on and, once the clock has moved on, off', async () => {
+  const sim = simulationOf(example('motion-light'));
+  sim.prime(new Map([['hall-sensor/illuminance', { value: 12, at: START - MIN }]]), new Map());
+  sim.feed('hall-sensor/motion', true);
+  await sim.settled();
+  assertEquals(said(sim, 'control'), ['would set hall-lamp/switch-0 to on']);
+  assertEquals(sim.values.get('hall-lamp/switch-0'), true, 'the simulated lamp took it');
+
+  sim.feed('hall-sensor/motion', false);
+  sim.advance(4 * MIN);
+  await sim.settled();
+  assertEquals(said(sim, 'control').length, 1, 'not yet: five minutes');
+  assertEquals(sim.nextTimer(), START + 5 * MIN);
+  sim.advance(MIN);
+  await sim.settled();
+  assertEquals(said(sim, 'control'), ['would set hall-lamp/switch-0 to on', 'would set hall-lamp/switch-0 to off']);
+  assertEquals(sim.values.get('hall-lamp/switch-0'), false);
+});
+
+Deno.test('simulation: a toggle flips what the simulated device holds; a button and a link feed it', async () => {
+  const sim = simulationOf(example('button-toggle'));
+  sim.press('try-it');
+  await sim.settled();
+  sim.feed('porch-button/input-0', 'single', true);
+  await sim.settled();
+  sim.feed('porch-button/input-0', 'long', true);
+  await sim.settled();
+  assertEquals(said(sim, 'control'), ['would toggle hall-lamp/switch-0, to on', 'would toggle hall-lamp/switch-0, to off']);
+
+  const linked = simulationOf('nodes: {in: {type: link-in, name: door, to: [log]}, log: {type: debug}}');
+  linked.sendLink('door', 'open');
+  assertEquals(said(linked, 'debug'), ['"open" from door']);
+});
+
+Deno.test('simulation: a shell line is said, not run, and a clock goes off as the time passes it', async () => {
+  const sim = simulationOf('nodes: {morning: {type: clock, at: "06:30", to: [run]}, run: {type: shell, run: echo hi}}');
+  assertEquals(sim.nextClock('morning'), START + 30 * MIN);
+  sim.engine.tick(START);
+  sim.advanceTo(sim.nextClock('morning')!);
+  await sim.settled();
+  assertEquals(said(sim, 'clock'), ['it is "06:30"']);
+  assertEquals(said(sim, 'shell'), ['would run: echo hi (VALUE=06:30)']);
+  assertEquals(sim.nextClock('morning'), START + 30 * MIN + 1440 * MIN);
+});
+
+Deno.test('simulation: a clock at sunrise is run on to the next sunrise, which moves with the days', () => {
+  const clock = simulationOf("nodes: {up: {type: clock, at: sunrise, location: '59.33, 18.07'}}");
+  const today = sunEvent(START + 6 * 60 * MIN, [59.33, 18.07], 'sunrise') as number;
+  assertEquals(clock.nextClock('up'), Math.floor(today / MIN) * MIN);
+  clock.advanceTo(today + MIN);
+  const tomorrow = sunEvent(START + 30 * 60 * MIN, [59.33, 18.07], 'sunrise') as number;
+  assertEquals(clock.nextClock('up'), Math.floor(tomorrow / MIN) * MIN);
+  assert(tomorrow - today > 1440 * MIN, 'later each day in November');
+});
+
+Deno.test('simulation: the lamp from sunset to sunrise goes off at sunrise and on again at sunset', async () => {
+  const sim = simulationOf(example('dusk-to-dawn')); // a Monday, 06:00 UTC: before sunrise at its location
+  sim.prime(new Map(), new Map());
+  await sim.settled();
+  const sunset = sunEvent(START + 6 * 60 * MIN, [59.33, 18.07], 'sunset') as number;
+  sim.advanceTo(sunset + MIN);
+  await sim.settled();
+  assertEquals(said(sim, 'control'), ['would set porch-lamp/switch-0 to off', 'would set porch-lamp/switch-0 to on']);
+});
+
+Deno.test('simulation: the log follows each node that sent, and says why one held a value back', async () => {
+  const sim = simulationOf(example('motion-light'));
+  sim.prime(new Map([['hall-sensor/illuminance', { value: 80, at: START - MIN }]]), new Map());
+  assertEquals(sim.entries, [], 'priming is quiet');
+  sim.feed('hall-sensor/motion', true);
+  await sim.settled();
+  assertEquals(sim.entries.map((entry) => `${entry.node}: ${entry.text}`).reverse(), [
+    'hall-sensor/motion: reads true',
+    'motion: sent true',
+    'linger: sent true on true',
+    'dark-and-moving: held back false: the same as it last sent',
+  ]);
+  assertEquals(said(sim, 'control'), [], 'too light for the lamp');
+});
+
+Deno.test('simulation: each output keeps what it last carried and when, for the label on its wire', () => {
+  const sim = simulationOf(
+    'nodes: {t: {type: device, endpoint: hall/temperature, to: [cold]}, cold: {type: compare, below: 19, to: {true: [log], false: [log]}}, log: {type: debug}}',
+  );
+  sim.feed('hall/temperature', 17);
+  sim.advance(MIN);
+  sim.feed('hall/temperature', 21);
+  const outputs = sim.status().cold.outputs!;
+  assertEquals(outputs.true, { value: true, at: new Date(START).toISOString() }, 'the true wire still says when it last carried true');
+  assertEquals(outputs.false, { value: false, at: new Date(START + MIN).toISOString() });
+  assertEquals(outputs.out.value, false);
+  assertEquals(sim.status().t.outputs?.out, { value: 21, at: new Date(START + MIN).toISOString() });
+});
+
+Deno.test('simulation: the motion light does not go on when it gets dark after the motion has ended', async () => {
+  const sim = simulationOf(example('motion-light'));
+  sim.prime(new Map([['hall-sensor/illuminance', { value: 80, at: START - MIN }]]), new Map());
+  sim.feed('hall-sensor/motion', true);
+  sim.feed('hall-sensor/motion', false);
+  sim.advance(6 * MIN);
+  sim.feed('hall-sensor/illuminance', 10);
+  await sim.settled();
+  assertEquals(said(sim, 'control'), ['would set hall-lamp/switch-0 to off'], 'no motion now, so no lamp');
+});
+
+Deno.test('simulation: the tour is shipped as the starting point is, off, with every kind of node, and its flows run', async () => {
+  const shipped = await Deno.readTextFile(new URL('../etc/automations.d/tour.yaml', import.meta.url));
+  assertEquals(shipped, example('tour'));
+  const raw = parse(shipped) as { enabled: boolean; nodes: Record<string, { type: string }> };
+  assertEquals(raw.enabled, false);
+  assertEquals([...new Set(Object.values(raw.nodes).map((node) => node.type))].sort(), Object.keys(KINDS).sort());
+
+  const sim = simulationOf(shipped);
+  sim.prime(new Map([['example-hall/illuminance', { value: 10, at: START - MIN }], ['example-house/away', { value: false, at: START - MIN }]]), new Map());
+  sim.feed('example-hall/motion', true);
+  sim.feed('example-bedroom/temperature', 26);
+  sim.feed('example-kitchen/temperature', 27);
+  sim.advance(10 * MIN);
+  await sim.settled();
+  assertEquals(said(sim, 'control'), ['would set example-hall-lamp/switch-0 to on']);
+  assertEquals(said(sim, 'link').length > 0, true, 'flow 4 shares the average');
+  assertEquals(
+    said(sim, 'shell'),
+    [
+      'would run: scripts/heating.sh (VALUE=26 away_mode=off)',
+      'would run: scripts/heating.sh (VALUE=26.5 away_mode=off)',
+      'would run: echo "too warm, or a window open: $TOPIC said $VALUE" (VALUE=on)',
+    ],
+    'flow 9 hears each average with whether anyone is away, and flow 5 hears it is warm ten minutes',
+  );
+
+  sim.addFile('scans', 'letter.pdf');
+  sim.addFile('scans', 'notes.txt');
+  sim.advance(5000);
+  assertEquals(
+    said(sim, 'debug').filter((text) => text.includes('inbox')),
+    ['"/home/example/inbox/letter.pdf" from /home/example/inbox'],
+    'flow 7 passes a PDF on, and nothing else',
+  );
+  sim.sendEvent('upkeep-failed', '/home/anna/a.jpg');
+  await sim.settled();
+  assertEquals(said(sim, 'event'), ['would raise example.upkeep.failed about /home/anna/a.jpg'], 'flow 8 hears a failed run, and raises an event of its own');
+});

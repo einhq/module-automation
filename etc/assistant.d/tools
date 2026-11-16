@@ -1,0 +1,11 @@
+# The commands the assistant offers its model as tools, one a line: core's device commands an
+# automation is written with, and automation's own. Each is described by its own --help; one that
+# writes becomes a proposal the user runs.
+devices
+device-show
+automation-status
+automations
+automation-show
+automation-check
+automation-new
+automation-set
